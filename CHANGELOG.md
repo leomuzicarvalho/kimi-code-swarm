@@ -43,7 +43,27 @@ All notable changes to this project will be documented in this file.
 
 - **`uptime_seconds` in API serialization** — `AgentStatus.to_dict()` now includes the computed `uptime_seconds` property so API consumers and dashboards receive it directly.
 
+### Fixed
+
+- **`ContextWindow.to_dict()` missing `usage_percent`** — The dashboard JavaScript expected `main_context.usage_percent` and `ctx.usage_percent`, but the model's `to_dict()` only serialized `used_tokens` and `max_tokens`. This caused a JS TypeError that crashed the update loop, preventing agent cards from rendering and leaving the context bar stuck at `0 / 0`. Fixed by adding `usage_percent` to `ContextWindow.to_dict()`.
+- **Dashboard server single-threaded blocking** — The dashboard used `HTTPServer`, which processes requests sequentially. An active SSE connection held the handler open in a `while True` loop, blocking all other requests (including `/api/status` and new page loads). Fixed by switching to `ThreadingHTTPServer` so the dashboard can serve multiple concurrent clients.
+
+### Added
+
+- **Dashboard verification script (`scripts/verify_dashboard.py`)** — A Playwright-based end-to-end test that deploys a live swarm, starts the dashboard, and verifies the UI updates in real time. It checks:
+  - SSE connection establishment
+  - Swarm overview stats (active agents, max capacity, tasks)
+  - Agent card rendering with names, phases, progress bars, context usage
+  - Live updates to progress and phase while the page is open
+  - Token and context stats after task execution
+  - Overall progress ring and main context bar
+  - Offline overlay behavior
+  - Terminated agent reflection
+  - API `/api/status` endpoint
+  - Captures screenshots at each stage for visual evidence
+
 ### Changed
 
 - **Dashboard mini-grid layout** — Expanded from 2-column to 3-column grid to accommodate Prompt, Completion, Total, Ctx Used, Ctx Max, and Messages stats.
 - **Dashboard model line** — Simplified to show only the model mapping; messages count moved to its own mini-stat cell.
+- **Defensive dashboard JavaScript** — Added fallback calculations for `usage_percent` in the embedded dashboard HTML so the UI gracefully handles state that may lack pre-computed percentages.

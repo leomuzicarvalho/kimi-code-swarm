@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -583,9 +583,10 @@ function updateTop(data) {
   document.getElementById('completedTasks').textContent = data.completed_tasks;
   document.getElementById('totalTasks').textContent = data.total_tasks;
 
-  const mc = data.main_context;
-  document.getElementById('mainCtxLabel').textContent = `${formatNum(mc.used_tokens)} / ${formatNum(mc.max_tokens)} (${mc.usage_percent.toFixed(1)}%)`;
-  document.getElementById('mainCtxBar').style.width = Math.min(mc.usage_percent, 100) + '%';
+  const mc = data.main_context || {};
+  const mc_pct = (mc.usage_percent !== undefined ? mc.usage_percent : (mc.max_tokens ? (mc.used_tokens / mc.max_tokens) * 100 : 0));
+  document.getElementById('mainCtxLabel').textContent = `${formatNum(mc.used_tokens || 0)} / ${formatNum(mc.max_tokens || 0)} (${mc_pct.toFixed(1)}%)`;
+  document.getElementById('mainCtxBar').style.width = Math.min(mc_pct, 100) + '%';
   document.getElementById('mainUsed').textContent = formatNum(mc.used_tokens);
   document.getElementById('mainAvail').textContent = formatNum(Math.max(0, mc.max_tokens - mc.used_tokens));
 
@@ -678,8 +679,9 @@ function renderAgents(agents) {
 
     card.querySelector('.prog-pct').textContent = progress.toFixed(0) + '%';
     card.querySelector('.prog-bar').style.width = Math.min(progress, 100) + '%';
-    card.querySelector('.ctx-pct').textContent = ctx.usage_percent.toFixed(1) + '%';
-    card.querySelector('.ctx-bar').style.width = Math.min(ctx.usage_percent, 100) + '%';
+    const ctx_pct = (ctx && ctx.usage_percent !== undefined) ? ctx.usage_percent : (ctx && ctx.max_tokens ? (ctx.used_tokens / ctx.max_tokens) * 100 : 0);
+    card.querySelector('.ctx-pct').textContent = ctx_pct.toFixed(1) + '%';
+    card.querySelector('.ctx-bar').style.width = Math.min(ctx_pct, 100) + '%';
     const uptimeSec = a.spawn_time ? Math.floor((Date.now() - new Date(a.spawn_time).getTime()) / 1000) : 0;
     const taskDesc = a.task && a.task.description ? a.task.description : 'No task assigned';
     const taskStatus = a.task ? a.task.status : '—';
@@ -840,7 +842,7 @@ class SSEBroadcaster:
 
 
 _broadcaster = SSEBroadcaster()
-_server_instance: HTTPServer | None = None
+_server_instance: ThreadingHTTPServer | None = None
 _server_thread: threading.Thread | None = None
 
 # ---------------------------------------------------------------------------
@@ -954,7 +956,7 @@ def start_dashboard(
     else:
         handler.state_path = DEFAULT_STATE_PATH
 
-    _server_instance = HTTPServer(("127.0.0.1", port), handler)
+    _server_instance = ThreadingHTTPServer(("127.0.0.1", port), handler)
     actual_port = _server_instance.server_address[1]
 
     def serve() -> None:

@@ -191,6 +191,15 @@ class TestModelMappings:
         assert orch._model_to_context_size("unknown") == 32768
 
 
+try:
+    from kimi_swarm import mcp_server
+
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
+
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="MCP / pydantic not available in this environment")
 class TestDashboardIntegration:
     def test_swarm_init_launches_dashboard(self):
         """Verify swarm_init auto-launches the live web dashboard."""

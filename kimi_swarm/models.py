@@ -79,7 +79,7 @@ class ContextWindow:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"used_tokens": self.used_tokens, "max_tokens": self.max_tokens}
+        return {"used_tokens": self.used_tokens, "max_tokens": self.max_tokens, "usage_percent": self.usage_percent}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextWindow:
