@@ -265,7 +265,7 @@ header p {
 /* Mini grid for context tokens */
 .mini-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 10px;
   margin-top: 12px;
 }
@@ -284,6 +284,35 @@ header p {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* Details grid */
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.detail-item .dlbl {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+.detail-item .dval {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail-item.full {
+  grid-column: 1 / -1;
 }
 
 /* Legend */
@@ -508,6 +537,32 @@ function setConnected(yes) {
   }
 }
 
+function formatDuration(seconds) {
+  const s = Math.floor(seconds);
+  if (s < 60) return s + 's';
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}m ${sec}s`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function formatTime(isoString) {
+  if (!isoString) return '—';
+  const d = new Date(isoString);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return diffMins + 'm ago';
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return diffHours + 'h ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function formatNum(n) {
   return Number(n).toLocaleString();
 }
@@ -592,10 +647,20 @@ function renderAgents(agents) {
           <div class="bar-track"><div class="bar-fill ctx-bar" style="width:0%;--bar-color:#f59e0b;--bar-color2:#ef4444;"></div></div>
         </div>
         <div class="mini-grid">
-          <div class="mini-stat"><div class="val tok-total">0</div><div class="lbl">Total Tokens</div></div>
+          <div class="mini-stat"><div class="val tok-prompt">0</div><div class="lbl">Prompt</div></div>
           <div class="mini-stat"><div class="val tok-comp">0</div><div class="lbl">Completion</div></div>
+          <div class="mini-stat"><div class="val tok-total">0</div><div class="lbl">Total</div></div>
           <div class="mini-stat"><div class="val ctx-used">0</div><div class="lbl">Ctx Used</div></div>
           <div class="mini-stat"><div class="val ctx-max">0</div><div class="lbl">Ctx Max</div></div>
+          <div class="mini-stat"><div class="val msg-count">0</div><div class="lbl">Messages</div></div>
+        </div>
+        <div class="details-grid">
+          <div class="detail-item"><div class="dlbl">Agent ID</div><div class="dval agent-id"></div></div>
+          <div class="detail-item"><div class="dlbl">Uptime</div><div class="dval uptime"></div></div>
+          <div class="detail-item"><div class="dlbl">Spawned</div><div class="dval spawn-time"></div></div>
+          <div class="detail-item"><div class="dlbl">Last Active</div><div class="dval last-active"></div></div>
+          <div class="detail-item"><div class="dlbl">Task Status</div><div class="dval task-status"></div></div>
+          <div class="detail-item full"><div class="dlbl">Task</div><div class="dval task-desc"></div></div>
         </div>
         <div style="margin-top:10px;font-size:0.72rem;color:var(--muted);" class="model-line"></div>
       `;
@@ -615,11 +680,23 @@ function renderAgents(agents) {
     card.querySelector('.prog-bar').style.width = Math.min(progress, 100) + '%';
     card.querySelector('.ctx-pct').textContent = ctx.usage_percent.toFixed(1) + '%';
     card.querySelector('.ctx-bar').style.width = Math.min(ctx.usage_percent, 100) + '%';
-    card.querySelector('.tok-total').textContent = formatNum(tokens.total_tokens);
-    card.querySelector('.tok-comp').textContent = formatNum(tokens.completion_tokens);
+    const uptimeSec = a.spawn_time ? Math.floor((Date.now() - new Date(a.spawn_time).getTime()) / 1000) : 0;
+    const taskDesc = a.task && a.task.description ? a.task.description : 'No task assigned';
+    const taskStatus = a.task ? a.task.status : '—';
+
+    card.querySelector('.tok-prompt').textContent = formatNum(tokens.prompt_tokens || 0);
+    card.querySelector('.tok-comp').textContent = formatNum(tokens.completion_tokens || 0);
+    card.querySelector('.tok-total').textContent = formatNum(tokens.total_tokens || 0);
     card.querySelector('.ctx-used').textContent = formatNum(ctx.used_tokens);
     card.querySelector('.ctx-max').textContent = formatNum(ctx.max_tokens);
-    card.querySelector('.model-line').textContent = `Model: ${modelLabel}  ·  Messages: ${a.messages_count}`;
+    card.querySelector('.msg-count').textContent = formatNum(a.messages_count || 0);
+    card.querySelector('.agent-id').textContent = a.agent_id ? a.agent_id.slice(0, 8) : '—';
+    card.querySelector('.uptime').textContent = formatDuration(uptimeSec);
+    card.querySelector('.spawn-time').textContent = a.spawn_time ? formatTime(a.spawn_time) : '—';
+    card.querySelector('.last-active').textContent = a.last_active ? formatTime(a.last_active) : '—';
+    card.querySelector('.task-status').textContent = taskStatus;
+    card.querySelector('.task-desc').textContent = taskDesc;
+    card.querySelector('.model-line').textContent = `Model: ${modelLabel}`;
 
     if (shouldPulse) card.classList.add('pulse');
     else card.classList.remove('pulse');

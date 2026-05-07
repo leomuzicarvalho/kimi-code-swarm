@@ -35,8 +35,8 @@ class KimiDisplay:
         # Agent table
         lines.append("### 🤖 Agents")
         lines.append("")
-        lines.append("| Agent | Type | Requested → Kimi Model | Phase | Progress | Context (Agent) | Context (vs Main) | Tokens |")
-        lines.append("|-------|------|------------------------|-------|----------|-----------------|-------------------|--------|")
+        lines.append("| Agent | Type | Model | Phase | Progress | Context | Prompt / Comp | Msg | Uptime | Task |")
+        lines.append("|-------|------|-------|-------|----------|---------|-------------|-----|--------|------|")
 
         for agent in status.agents:
             progress_bar = KimiDisplay._progress_bar(agent.task.progress_percent if agent.task else 0)
@@ -48,11 +48,24 @@ class KimiDisplay:
             agent_ctx_str = f"{ctx.used_tokens:,} / {ctx.max_tokens:,} ({ctx.usage_percent:.1f}%)"
             vs_main = f"{ctx.used_tokens / max(main_ctx.used_tokens, 1):.1f}x" if main_ctx.used_tokens > 0 else "N/A"
 
-            tokens_str = f"{agent.tokens.total_tokens:,} (↗{agent.tokens.completion_tokens:,})"
+            tokens_str = f"{agent.tokens.prompt_tokens:,} / {agent.tokens.completion_tokens:,}"
+            msg_count = agent.messages_count
+
+            uptime_sec = int(agent.uptime_seconds)
+            if uptime_sec < 60:
+                uptime_str = f"{uptime_sec}s"
+            elif uptime_sec < 3600:
+                uptime_str = f"{uptime_sec // 60}m {uptime_sec % 60}s"
+            else:
+                uptime_str = f"{uptime_sec // 3600}h {(uptime_sec % 3600) // 60}m"
+
+            task_desc = agent.task.description if agent.task else ""
+            if len(task_desc) > 30:
+                task_desc = task_desc[:27] + "..."
 
             model_display = f"`{agent.model}` → `{agent.resolved_model}`" if agent.resolved_model and agent.resolved_model != agent.model else f"`{agent.model}`"
             lines.append(
-                f"| {phase_emoji} **{agent.name}** | {agent.agent_type} | {model_display} | `{agent.phase.value}` | {progress_bar} | {agent_ctx_str} | {vs_main} | {tokens_str} |"
+                f"| {phase_emoji} **{agent.name}** | {agent.agent_type} | {model_display} | `{agent.phase.value}` | {progress_bar} | {agent_ctx_str} | {tokens_str} | {msg_count} | {uptime_str} | {task_desc} |"
             )
 
         lines.append("")

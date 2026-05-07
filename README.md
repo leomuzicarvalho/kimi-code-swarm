@@ -193,12 +193,12 @@ Running `kimi-swarm status --kimi-display` outputs a markdown table that renders
 
 ### 🤖 Agents
 
-| Agent | Type | Requested → Kimi Model | Phase | Progress | Context (Agent) | Context (vs Main) | Tokens |
-|-------|------|------------------------|-------|----------|-----------------|-------------------|--------|
-| 🆕 **arch** | architect | `sonnet` → `kimi-k2.6` | `idle` | ░░░░░░░░░░ 0% | 0 / 256,000 (0.0%) | 0.0x | 0 (↗0) |
-| ✅ **fe** | coder | `sonnet` → `kimi-k2.6` | `completed` | ██████████ 100% | 3,200 / 256,000 (1.3%) | 0.3x | 3,200 (↗1,100) |
-| ⚡ **be** | coder | `haiku` → `moonshot-v1-8k` | `executing` | ██████░░░░ 60% | 5,800 / 8,192 (70.8%) | 0.5x | 5,800 (↗2,400) |
-| 👀 **sec** | reviewer | `sonnet` → `kimi-k2.6` | `reviewing` | ███████░░░ 75% | 2,100 / 256,000 (0.8%) | 0.2x | 2,100 (↗800) |
+| Agent | Type | Model | Phase | Progress | Context | Prompt / Comp | Msg | Uptime | Task |
+|-------|------|-------|-------|----------|---------|-------------|-----|--------|------|
+| 🆕 **arch** | architect | `sonnet` → `kimi-k2.6` | `idle` | ░░░░░░░░░░ 0% | 0 / 256,000 (0.0%) | 0 / 0 | 0 | 0s | |
+| ✅ **fe** | coder | `sonnet` → `kimi-k2.6` | `completed` | ██████████ 100% | 3,200 / 256,000 (1.3%) | 2,100 / 1,100 | 12 | 5m 3s | Build login page with OAuth |
+| ⚡ **be** | coder | `haiku` → `moonshot-v1-8k` | `executing` | ██████░░░░ 60% | 5,800 / 8,192 (70.8%) | 3,400 / 2,400 | 8 | 2m 15s | Create JWT auth middleware |
+| 👀 **sec** | reviewer | `sonnet` → `kimi-k2.6` | `reviewing` | ███████░░░ 75% | 2,100 / 256,000 (0.8%) | 1,300 / 800 | 5 | 4m 30s | Review auth implementation |
 
 ---
 **Legend:**
@@ -211,12 +211,14 @@ Running `kimi-swarm status --kimi-display` outputs a markdown table that renders
 |--------|---------|
 | **Agent** | Name + phase emoji |
 | **Type** | Role (coder, tester, reviewer, etc.) |
-| **Requested → Kimi Model** | The alias you passed and the actual Kimi model it resolves to |
+| **Model** | The alias you passed and the actual Kimi model it resolves to |
 | **Phase** | Current lifecycle state |
 | **Progress** | Visual bar + percentage for the agent's active task |
-| **Context (Agent)** | Used / Max tokens + percent for this agent's context window |
-| **Context (vs Main)** | Ratio of agent's used tokens to main agent's used tokens |
-| **Tokens** | Total tokens consumed (with completion tokens in ↗) |
+| **Context** | Used / Max tokens + percent for this agent's context window |
+| **Prompt / Comp** | Prompt tokens vs completion tokens consumed |
+| **Msg** | Number of messages exchanged with the agent |
+| **Uptime** | How long the agent has been alive (`Xs`, `Xm Xs`, `Xh Xm`) |
+| **Task** | Current task description (truncated to 30 chars) |
 
 ---
 
@@ -227,7 +229,9 @@ The web dashboard opens in your default browser and stays live as long as the sw
 - 🎨 **Dark glassmorphism UI** with animated particle network background
 - 📊 **Circular progress ring** showing overall swarm completion
 - 🤖 **Live agent cards** with phase colors, pulse animations, and smooth progress bars
-- 📈 **Token usage visualization** — total, completion, and context window bars
+- 📈 **Token usage visualization** — Prompt, Completion, Total, Context Used/Max, and Messages count
+- ⏱️ **Agent lifetime tracking** — Uptime, Spawned time, and Last Active (with smart relative formatting)
+- 📝 **Task visibility** — Task description and Task Status (`pending` / `in_progress` / `completed` / `failed`)
 - 🟢 **Connection status** indicator with auto-reconnect
 - 🔴 **Offline overlay** when no swarm is detected
 
@@ -261,8 +265,6 @@ Each agent maps to a todo item with its phase and a visual progress bar (`██
 
 ## All CLI Commands
 
-| Command | Description |
-|---------|-------------|
 | Command | Description |
 |---------|-------------|
 | `kimi-swarm init` | Create a new swarm (`--ui` to open dashboard) |

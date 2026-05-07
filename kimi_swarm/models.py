@@ -183,6 +183,7 @@ class AgentStatus:
             "spawn_time": self.spawn_time.isoformat(),
             "last_active": self.last_active.isoformat(),
             "metadata": self.metadata,
+            "uptime_seconds": self.uptime_seconds,
         }
 
     @classmethod
