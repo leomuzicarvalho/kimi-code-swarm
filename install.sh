@@ -88,13 +88,32 @@ if [[ -z "$PYTHON" ]]; then
 fi
 
 PY_VERSION=$("$PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-log_info "Detected Python $PY_VERSION at $(command -v "$PYTHON")"
+PYTHON_ABS=$(command -v "$PYTHON")
+log_info "Detected Python $PY_VERSION at $PYTHON_ABS"
 
 if "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)'; then
     : # ok
 else
     log_err "Python 3.10+ is required. Found $PY_VERSION."
     exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# Detect macOS Apple Silicon + universal Python architecture mismatch risk
+# ------------------------------------------------------------------------------
+PIP_INSTALL_PREFIX=""
+PIP_EXTRA_FLAGS=""
+ARCH_FIX_NEEDED=false
+
+if [[ "$(uname -s)" == "Darwin" ]] && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+    # Running on Apple Silicon hardware
+    if file "$PYTHON_ABS" 2>/dev/null | grep -q "universal binary"; then
+        log_warn "Apple Silicon Mac detected with universal Python binary."
+        log_info "Forcing ARM64 architecture for pip installs to avoid x86_64 wheel cache ..."
+        PIP_INSTALL_PREFIX="arch -arm64 "
+        PIP_EXTRA_FLAGS="--no-cache-dir"
+        ARCH_FIX_NEEDED=true
+    fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -137,12 +156,70 @@ fi
 
 # Install
 if [[ -n "$INSTALL_USER" ]]; then
-    "$PYTHON" -m pip install "$PIP_SPEC" $INSTALL_USER --quiet
+    ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install "$PIP_SPEC" $INSTALL_USER --quiet $PIP_EXTRA_FLAGS
 else
-    "$PYTHON" -m pip install "$PIP_SPEC" --quiet
+    ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install "$PIP_SPEC" --quiet $PIP_EXTRA_FLAGS
 fi
 
 log_ok "Package installed successfully."
+
+# ------------------------------------------------------------------------------
+# Verify native extension architecture (macOS Apple Silicon safety check)
+# ------------------------------------------------------------------------------
+if [[ "$ARCH_FIX_NEEDED" == "true" ]]; then
+    log_info "Checking for x86_64-only native extensions in site-packages ..."
+
+    # Find all .so files that are NOT universal binaries and ARE x86_64-only
+    X86_64_SOS=$(${PIP_INSTALL_PREFIX}"$PYTHON" -c "
+import sysconfig, subprocess, os, sys
+site_packages = sysconfig.get_path('purelib')
+# Also check platlib for platform-specific packages
+platlib = sysconfig.get_path('platlib')
+paths = [p for p in {site_packages, platlib} if p]
+bad_files = []
+for p in paths:
+    if not os.path.isdir(p):
+        continue
+    for root, _, files in os.walk(p):
+        for f in files:
+            if f.endswith('.so'):
+                fp = os.path.join(root, f)
+                try:
+                    out = subprocess.check_output(['file', fp], text=True)
+                    if 'x86_64' in out and 'arm64' not in out and 'universal' not in out:
+                        bad_files.append(fp)
+                except Exception:
+                    pass
+for bf in bad_files:
+    print(bf)
+" 2>/dev/null)
+
+    if [[ -n "$X86_64_SOS" ]]; then
+        log_warn "Found x86_64-only .so files (architecture mismatch):"
+        echo "$X86_64_SOS"
+        log_info "Auto-fixing by force-reinstalling affected packages with ARM64 wheels ..."
+
+        # Extract package names from the paths and deduplicate
+        PKGS_TO_FIX=$(echo "$X86_64_SOS" | sed -n 's|.*/site-packages/\([^/]*\)-.*|\1|p; s|.*/site-packages/\([^/]*\)/.*|\1|p' | sort -u | tr '\n' ' ')
+        # Common packages known to have this issue
+        for pkg in pydantic-core rpds-py cryptography protobuf charset-normalizer cffi lxml; do
+            if echo "$X86_64_SOS" | grep -qi "$pkg"; then
+                if [[ ! "$PKGS_TO_FIX" =~ $pkg ]]; then
+                    PKGS_TO_FIX="$PKGS_TO_FIX $pkg"
+                fi
+            fi
+        done
+
+        if [[ -n "$PKGS_TO_FIX" ]]; then
+            log_info "Reinstalling: $PKGS_TO_FIX"
+            ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install --force-reinstall --no-cache-dir $PKGS_TO_FIX --quiet || {
+                log_warn "Some packages could not be force-reinstalled. MCP server may fail to start."
+            }
+        fi
+    else
+        log_ok "All native extensions are ARM64-compatible."
+    fi
+fi
 
 # ------------------------------------------------------------------------------
 # Verify CLI is available
@@ -426,9 +503,9 @@ fi
 # Ensure MCP dependency is available
 # ------------------------------------------------------------------------------
 log_info "Checking MCP dependency ..."
-if ! "$PYTHON" -c "import mcp" 2>/dev/null; then
+if ! ${PIP_INSTALL_PREFIX}"$PYTHON" -c "import mcp" 2>/dev/null; then
     log_warn "MCP package not found. Installing explicitly ..."
-    "$PYTHON" -m pip install "mcp>=1.0.0" --quiet
+    ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install "mcp>=1.0.0" --quiet $PIP_EXTRA_FLAGS
 fi
 
 # ------------------------------------------------------------------------------
@@ -445,14 +522,19 @@ else
 fi
 
 # MCP server smoke test
-MCP_IMPORT_OUTPUT=$("$PYTHON" -c "from kimi_swarm.mcp_server import main; print('MCP server import OK')" 2>&1) || true
-if echo "$MCP_IMPORT_OUTPUT" | grep -q "MCP server import OK"; then
-    log_ok "MCP server import test passed!"
+MCP_IMPORT_OUTPUT=$(${PIP_INSTALL_PREFIX}"$PYTHON" -c "from mcp.server.fastmcp import FastMCP; print('FastMCP import OK')" 2>&1) || true
+if echo "$MCP_IMPORT_OUTPUT" | grep -q "FastMCP import OK"; then
+    log_ok "MCP server FastMCP import test passed!"
 else
-    log_err "MCP server import failed. The 'mcp' package may be missing."
+    log_err "MCP server FastMCP import failed. This usually means native extensions have the wrong architecture."
     log_info "Diagnostics:"
     echo "  $MCP_IMPORT_OUTPUT"
-    log_info "Try: $PYTHON -m pip install mcp"
+    if [[ "$ARCH_FIX_NEEDED" == "true" ]]; then
+        log_info "Try manually fixing with:"
+        log_info "  ${PIP_INSTALL_PREFIX}$PYTHON -m pip install --force-reinstall --no-cache-dir pydantic-core rpds-py mcp"
+    else
+        log_info "Try: $PYTHON -m pip install mcp"
+    fi
 fi
 
 # ------------------------------------------------------------------------------

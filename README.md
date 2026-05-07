@@ -86,6 +86,19 @@ To use Kimi Swarm **inside Kimi Code chat** (as MCP tools rather than terminal c
 
 > ⚠️ **Important:** Use the **absolute path** to the Python interpreter that has `kimi-swarm` installed. If you use `"command": "python3"`, running `kimi` from a project with an active virtual environment will cause the MCP server to spawn with the venv's Python — which won't have `kimi-swarm` installed and the connection will fail.
 
+If you're using the local `.venv` from this repo, point to it directly:
+```json
+{
+  "mcpServers": {
+    "kimi-swarm": {
+      "command": "/Users/leonardomuzi/kimi-swarm-cli/.venv/bin/python",
+      "args": ["-m", "kimi_swarm.mcp_server"],
+      "autoStart": true
+    }
+  }
+}
+```
+
 The [install.sh](#one-liner-install-recommended) script handles this automatically by detecting and pinning the absolute Python path.
 
 ---
@@ -101,6 +114,8 @@ curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main
 ```
 
 This detects your Python, installs `kimi-swarm` into the **current environment only**, and verifies the CLI is available immediately. No sudo, no system-wide changes.
+
+> 🍎 **Apple Silicon Macs:** The installer automatically detects universal Python binaries (e.g., from python.org) and forces ARM64 architecture during pip installs, preventing the common `mach-o file, but is an incompatible architecture (have 'x86_64', need 'arm64')` error. It also scans for x86_64-only native extensions after installation and auto-fixes them.
 
 #### Install Options
 
@@ -120,10 +135,29 @@ curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main
 
 ### Manual Install (if you prefer)
 
+**Recommended: use a local venv** to avoid polluting your system Python and to prevent architecture cache issues on Apple Silicon:
+
 ```bash
 git clone git@github.com:leomuzicarvalho/kimi-code-swarm.git
 cd kimi-code-swarm
-pip install -e ".[dev]"
+python3 -m venv .venv
+
+# On Apple Silicon Macs, force ARM64 to avoid x86_64 wheel cache issues
+arch -arm64 .venv/bin/pip install --no-cache-dir -e ".[dev]"
+
+# On other platforms
+.venv/bin/pip install -e ".[dev]"
+```
+
+Then activate it in any terminal session:
+```bash
+source .venv/bin/activate
+```
+
+Or run commands directly via the venv:
+```bash
+.venv/bin/kimi-swarm --version
+.venv/bin/python -m kimi_swarm.mcp_server
 ```
 
 ### Use as a Python Module Within Kimi Code
