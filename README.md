@@ -68,6 +68,28 @@ You can also pass **explicit Kimi model names** directly:
 
 ---
 
+## MCP Server Setup
+
+To use Kimi Swarm **inside Kimi Code chat** (as MCP tools rather than terminal commands), add this to `~/.kimi/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "kimi-swarm": {
+      "command": "/absolute/path/to/your/python3",
+      "args": ["-m", "kimi_swarm.mcp_server"],
+      "autoStart": true
+    }
+  }
+}
+```
+
+> ⚠️ **Important:** Use the **absolute path** to the Python interpreter that has `kimi-swarm` installed. If you use `"command": "python3"`, running `kimi` from a project with an active virtual environment will cause the MCP server to spawn with the venv's Python — which won't have `kimi-swarm` installed and the connection will fail.
+
+The [install.sh](#one-liner-install-recommended) script handles this automatically by detecting and pinning the absolute Python path.
+
+---
+
 ## Installation on Kimi Code
 
 ### One-liner Install (Recommended)

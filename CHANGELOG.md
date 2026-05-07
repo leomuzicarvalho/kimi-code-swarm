@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **MCP Server Setup documentation in README** — Added a dedicated section explaining how to manually configure `~/.kimi/mcp.json`, with a clear warning to use the **absolute path** to the Python interpreter. This prevents the common pitfall where `"command": "python3"` resolves to a project virtual environment's Python (which lacks `kimi-swarm`), causing the MCP connection to fail when running `kimi` outside the install folder.
+
 ### Fixed
 
 - **MCP server only worked from the repo folder** — The root cause was `DEFAULT_STATE_PATH = Path(".kimi-swarm-state.json")`, a relative path that placed swarm state in whatever directory `kimi` happened to be running in. When users initialized a swarm in one folder and opened Kimi elsewhere, the MCP server couldn't find the state file and appeared broken. Fixed by changing the default state path to a global location (`~/.kimi/kimi-swarm-state.json`). The dashboard meta file also moved to `~/.kimi/kimi-swarm-dashboard.json`. Parent directories are auto-created on first write.
