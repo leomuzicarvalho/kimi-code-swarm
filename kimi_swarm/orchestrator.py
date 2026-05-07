@@ -19,7 +19,7 @@ from .models import (
     TaskInfo,
     TokenUsage,
 )
-from .mcp_client import get_mcp_client, MockMCPClient, RufloMCPClient
+from .mcp_client import SwarmMCPClient
 from . import model_mapping
 
 
@@ -39,7 +39,7 @@ class SwarmOrchestrator:
         self.max_agents = max_agents
         self.swarm_id: str = ""
         self._agents: dict[str, AgentStatus] = {}
-        self._client = get_mcp_client()
+        self._client = SwarmMCPClient()
         self._is_active = False
         self._main_context = ContextWindow(used_tokens=0, max_tokens=128000)
         self._state_path = Path(state_path) if state_path else DEFAULT_STATE_PATH
@@ -63,7 +63,7 @@ class SwarmOrchestrator:
         result = self._client.agent_spawn(config)
         agent_id = result.get("agent_id", f"agent-{uuid.uuid4().hex[:8]}")
 
-        # Resolve Ruflo alias → actual Kimi model
+        # Resolve model alias → actual Kimi model
         resolved = model_mapping.resolve_kimi_model(config.model)
         max_tokens = model_mapping.get_context_size(config.model)
 

@@ -34,33 +34,26 @@ All of this renders as a **markdown table directly in Kimi's chat window** so yo
 │         └──────────┬──────────┘             │
 └────────────────────┼────────────────────────┘
                      │
-        ┌────────────┼────────────┐
-        │            │            │
-   ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-   │ Agent 1 │  │ Agent 2 │  │ Agent 3 │  ...
-   │ (coder) │  │ (tester)│  │(reviewer│
-   └────┬────┘  └────┬────┘  └────┬────┘
-        │            │            │
-        └────────────┴────────────┘
-                     │
-            ┌────────▼────────┐
-            │  Ruflo MCP      │
-            │    Bridge       │
-            └─────────────────┘
+            ┌────────┼────────┐
+            │        │        │
+       ┌────▼────┐ ┌──▼───┐ ┌──▼───┐
+       │ Agent 1 │ │Agent2│ │Agent3│  ...
+       │ (coder) │ │(tester)│(reviewer│
+       └─────────┘ └──────┘ └──────┘
 ```
 
 1. **Initialize** a swarm with a topology (`hierarchical`, `mesh`, or `consensus`)
 2. **Spawn agents** with roles, models, and specializations
-3. **Assign & execute tasks** — the orchestrator routes work via the Ruflo-Kimi Bridge
+3. **Assign & execute tasks** — the orchestrator routes work to agents
 4. **Monitor** all agents in real-time with `kimi-swarm status --kimi-display`
 5. **Store memory** and retrieve results when agents complete
 
-### Model Mapping (Ruflo → Kimi)
+### Model Mapping
 
-When you spawn an agent with a Ruflo model alias, it resolves to the actual Kimi model:
+When you spawn an agent with a model alias, it resolves to the actual Kimi model:
 
-| Ruflo Alias | Resolved Kimi Model | Context Window |
-|-------------|---------------------|----------------|
+| Alias | Resolved Kimi Model | Context Window |
+|-------|---------------------|----------------|
 | `sonnet` | `kimi-k2.6` | **256,000 tokens** |
 | `opus` | `kimi-k2.6` | **256,000 tokens** |
 | `inherit` | `kimi-k2.6` | **256,000 tokens** |
@@ -70,14 +63,6 @@ You can also pass **explicit Kimi model names** directly:
 - `moonshot-v1-8k`, `moonshot-v1-32k`, `moonshot-v1-128k`
 - `kimi-k2-0712-preview` (128k)
 - `kimi-k2.6` (256k)
-
-### Execution Modes
-
-The Ruflo-Kimi Bridge auto-selects the execution backend:
-
-1. **Anthropic API** — if `ANTHROPIC_API_KEY` is set
-2. **Kimi API** — if `KIMI_API_KEY` or `MOONSHOT_API_KEY` is set
-3. **Native Kimi** — no API key; returns delegation prompts that Kimi Code executes directly with its own tools
 
 ---
 
@@ -230,6 +215,17 @@ Running `kimi-swarm status --kimi-display` outputs a markdown table that renders
 
 ---
 
+## Sticky Live Status via Todo Sync
+
+When using the **MCP server** inside Kimi Code, every swarm tool response includes a `todos` array. The AI syncs this to `SetTodoList` after each operation, giving you a live-updating status panel:
+
+- **Web UI** — appears in the prompt toolbar as an expandable todo panel
+- **Shell UI** — renders as display blocks in the conversation
+
+Each agent maps to a todo item with its phase and a visual progress bar (`██████████ 100%`). As agents move from `idle` → `executing` → `completed`, the todo list updates automatically.
+
+---
+
 ## All CLI Commands
 
 | Command | Description |
@@ -264,9 +260,8 @@ python demo.py
 - Python 3.10+
 - `rich` (for terminal formatting)
 - `pydantic` (for data validation)
-- Optional: Ruflo-Kimi Bridge MCP server (for real multi-agent execution)
 
-Without the MCP bridge, the framework runs in **mock mode** — it simulates agent execution so you can build and test workflows locally before connecting to live agents.
+The framework runs in **local simulation mode** — it simulates agent execution so you can build and test workflows. For real multi-agent execution, tasks are delegated back to Kimi Code directly.
 
 ---
 

@@ -1,4 +1,4 @@
-"""Client for Ruflo MCP bridge."""
+"""Local MCP client for swarm orchestration."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from typing import Any
 from .models import AgentConfig, AgentStatus, AgentPhase, TaskInfo, TokenUsage, ContextWindow
 
 
-class MockMCPClient:
-    """Mock MCP client for testing and demo when bridge is unavailable."""
+class SwarmMCPClient:
+    """Local MCP client — simulates agent execution for workflow building and testing."""
 
     def __init__(self) -> None:
         self._agents: dict[str, dict[str, Any]] = {}
@@ -73,56 +73,3 @@ class MockMCPClient:
 
     def memory_search(self, namespace: str, query: str) -> list[dict[str, Any]]:
         return []
-
-
-class RufloMCPClient:
-    """Real Ruflo MCP client — calls MCP tools via the bridge."""
-
-    def __init__(self) -> None:
-        # In a real implementation, this would connect to the MCP server
-        # and expose tools like swarm_init, agent_spawn, etc.
-        self._mock = MockMCPClient()
-
-    def _call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-        # Placeholder: real implementation would use actual MCP client
-        # Since we can't guarantee MCP availability, delegate to mock
-        # but log that we'd prefer real MCP.
-        method = getattr(self._mock, tool_name, None)
-        if method:
-            return method(**arguments)
-        raise NotImplementedError(f"Tool {tool_name} not available")
-
-    def swarm_init(self, topology: str, max_agents: int) -> dict[str, Any]:
-        return self._call_tool("swarm_init", {"topology": topology, "max_agents": max_agents})
-
-    def agent_spawn(self, config: AgentConfig) -> dict[str, Any]:
-        return self._call_tool("agent_spawn", {"config": config})
-
-    def agent_execute(self, agent_id: str, prompt: str) -> dict[str, Any]:
-        return self._call_tool("agent_execute", {"agent_id": agent_id, "prompt": prompt})
-
-    def agent_status(self, agent_id: str) -> dict[str, Any]:
-        return self._call_tool("agent_status", {"agent_id": agent_id})
-
-    def agent_list(self) -> list[dict[str, Any]]:
-        return self._call_tool("agent_list", {})
-
-    def agent_terminate(self, agent_id: str) -> dict[str, Any]:
-        return self._call_tool("agent_terminate", {"agent_id": agent_id})
-
-    def swarm_shutdown(self, swarm_id: str) -> dict[str, Any]:
-        return self._call_tool("swarm_shutdown", {"swarm_id": swarm_id})
-
-    def memory_store(self, namespace: str, key: str, value: str) -> dict[str, Any]:
-        return self._call_tool("memory_store", {"namespace": namespace, "key": key, "value": value})
-
-    def memory_search(self, namespace: str, query: str) -> list[dict[str, Any]]:
-        return self._call_tool("memory_search", {"namespace": namespace, "query": query})
-
-
-def get_mcp_client() -> RufloMCPClient | MockMCPClient:
-    """Return the best available MCP client."""
-    # Check if real MCP bridge is available
-    if os.environ.get("RUFLO_MCP_AVAILABLE"):
-        return RufloMCPClient()
-    return MockMCPClient()

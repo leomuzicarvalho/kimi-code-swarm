@@ -33,18 +33,55 @@ def _get_orch() -> SwarmOrchestrator:
     return _orch
 
 
+def _status_to_todos(status: Any) -> list[dict[str, str]]:
+    """Convert swarm status to a todo list for Kimi's sticky toolbar panel."""
+    todos: list[dict[str, str]] = []
+    header = f"🐝 {status.swarm_id[:12]} | {status.active_agents}/{status.max_agents} agents | {status.overall_progress:.0f}% done"
+    todos.append({"title": header, "status": "in_progress"})
+
+    for agent in status.agents:
+        phase = agent.phase.value
+        progress = agent.task.progress_percent if agent.task else 0.0
+        if phase in ("completed", "terminated"):
+            item_status = "done"
+        elif phase in ("idle", "spawning"):
+            item_status = "pending"
+        else:
+            item_status = "in_progress"
+
+        bar = "█" * int(progress / 10) + "░" * (10 - int(progress / 10))
+        title = f"{agent.name} ({agent.agent_type}) — {phase} {bar} {progress:.0f}%"
+        todos.append({"title": title, "status": item_status})
+
+    if not status.agents:
+        todos.append({"title": "No agents spawned yet — use agent_spawn to add agents", "status": "pending"})
+
+    return todos
+
+
+def _swarm_response(status: Any) -> dict[str, Any]:
+    """Build a standard swarm response with markdown and todo-sync data."""
+    return {
+        "swarm_id": status.swarm_id,
+        "topology": status.topology.value,
+        "max_agents": status.max_agents,
+        "active_agents": status.active_agents,
+        "overall_progress": status.overall_progress,
+        "completed_tasks": status.completed_tasks,
+        "total_tasks": status.total_tasks,
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
+    }
+
+
 @mcp.tool()
 def swarm_init(topology: str = "hierarchical", max_agents: int = 5) -> dict[str, Any]:
     """Initialize a new swarm with the given topology and max agents."""
     global _orch
     _orch = SwarmOrchestrator(topology=topology, max_agents=max_agents, state_path=_state_path)
     status = _orch.init_swarm()
-    return {
-        "swarm_id": status.swarm_id,
-        "topology": status.topology.value,
-        "max_agents": status.max_agents,
-        "markdown": KimiDisplay.status_to_markdown(status),
-    }
+    return _swarm_response(status)
 
 
 @mcp.tool()
@@ -52,17 +89,7 @@ def swarm_status() -> dict[str, Any]:
     """Get the current swarm status as markdown for display."""
     orch = _get_orch()
     status = orch.get_status()
-    return {
-        "swarm_id": status.swarm_id,
-        "topology": status.topology.value,
-        "active_agents": status.active_agents,
-        "max_agents": status.max_agents,
-        "overall_progress": status.overall_progress,
-        "completed_tasks": status.completed_tasks,
-        "total_tasks": status.total_tasks,
-        "markdown": KimiDisplay.status_to_markdown(status),
-        "short": KimiDisplay.short_status(status),
-    }
+    return _swarm_response(status)
 
 
 @mcp.tool()
@@ -74,6 +101,8 @@ def swarm_shutdown(clear_state: bool = False) -> dict[str, Any]:
     result = {
         "swarm_id": status.swarm_id,
         "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
     }
     if clear_state:
         orch.clear_state()
@@ -93,6 +122,7 @@ def agent_spawn(
     orch = _get_orch()
     config = AgentConfig(type=agent_type, name=name, model=model, domain=domain, task=task)
     agent = orch.spawn_agent(config)
+    status = orch.get_status()
     return {
         "agent_id": agent.agent_id,
         "name": agent.name,
@@ -100,6 +130,9 @@ def agent_spawn(
         "model": agent.model,
         "resolved_model": agent.resolved_model,
         "phase": agent.phase.value,
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
     }
 
 
@@ -108,12 +141,16 @@ def agent_execute(agent_id: str, prompt: str) -> dict[str, Any]:
     """Execute a task on an agent."""
     orch = _get_orch()
     result = orch.execute_task(agent_id, prompt)
+    status = orch.get_status()
     return {
         "agent_id": agent_id,
         "status": result.get("status"),
         "mode": result.get("mode", "native_kimi"),
         "result": result.get("result", ""),
         "tokens": result.get("tokens", {}),
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
     }
 
 
@@ -122,11 +159,15 @@ def agent_assign(agent_id: str, task_description: str) -> dict[str, Any]:
     """Assign a task to an agent."""
     orch = _get_orch()
     task = orch.assign_task(agent_id, task_description)
+    status = orch.get_status()
     return {
         "agent_id": agent_id,
         "task_id": task.task_id,
         "description": task.description,
         "status": task.status,
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
     }
 
 
@@ -135,7 +176,14 @@ def agent_progress(agent_id: str, percent: float) -> dict[str, Any]:
     """Update an agent's progress (0-100)."""
     orch = _get_orch()
     orch.update_agent_progress(agent_id, percent)
-    return {"agent_id": agent_id, "progress": percent}
+    status = orch.get_status()
+    return {
+        "agent_id": agent_id,
+        "progress": percent,
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
+    }
 
 
 @mcp.tool()
@@ -143,7 +191,14 @@ def agent_phase(agent_id: str, phase: str) -> dict[str, Any]:
     """Set an agent's phase."""
     orch = _get_orch()
     orch.set_agent_phase(agent_id, phase)
-    return {"agent_id": agent_id, "phase": phase}
+    status = orch.get_status()
+    return {
+        "agent_id": agent_id,
+        "phase": phase,
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
+    }
 
 
 @mcp.tool()
@@ -151,7 +206,14 @@ def agent_terminate(agent_id: str) -> dict[str, Any]:
     """Terminate an agent."""
     orch = _get_orch()
     orch.terminate_agent(agent_id)
-    return {"agent_id": agent_id, "status": "terminated"}
+    status = orch.get_status()
+    return {
+        "agent_id": agent_id,
+        "status": "terminated",
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
+    }
 
 
 @mcp.tool()
@@ -159,6 +221,7 @@ def agent_list() -> dict[str, Any]:
     """List all agents in the swarm."""
     orch = _get_orch()
     agents = orch.list_agents()
+    status = orch.get_status()
     return {
         "agents": [
             {
@@ -172,7 +235,10 @@ def agent_list() -> dict[str, Any]:
                 "tokens_total": a.tokens.total_tokens,
             }
             for a in agents
-        ]
+        ],
+        "markdown": KimiDisplay.status_to_markdown(status),
+        "short": KimiDisplay.short_status(status),
+        "todos": _status_to_todos(status),
     }
 
 
@@ -207,7 +273,7 @@ def swarm_demo() -> dict[str, Any]:
     markdown = KimiDisplay.status_to_markdown(status)
     orch.shutdown()
     orch.clear_state()
-    return {"markdown": markdown, "swarm_id": status.swarm_id}
+    return {"markdown": markdown, "swarm_id": status.swarm_id, "todos": _status_to_todos(status)}
 
 
 def main() -> None:

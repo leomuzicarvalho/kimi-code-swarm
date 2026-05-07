@@ -124,7 +124,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps(data, indent=2))
         return 0
 
-    if args.kimi_display or args.markdown:
+    if args.kimi_display:
         print(KimiDisplay.status_to_markdown(status))
     else:
         print(KimiDisplay.status_to_rich(status))
