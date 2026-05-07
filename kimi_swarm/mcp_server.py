@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from .models import AgentConfig, AgentPhase, SwarmTopology
 from .orchestrator import SwarmOrchestrator, DEFAULT_STATE_PATH
 from .display import KimiDisplay
+from .web_dashboard import launch_persistent_dashboard, stop_persistent_dashboard
 
 mcp = FastMCP("kimi-swarm")
 
@@ -77,10 +78,38 @@ def _swarm_response(status: Any) -> dict[str, Any]:
 
 @mcp.tool()
 def swarm_init(topology: str = "hierarchical", max_agents: int = 5) -> dict[str, Any]:
-    """Initialize a new swarm with the given topology and max agents."""
+    """Initialize a new swarm with the given topology and max agents.
+
+    Automatically cleans up any existing swarm and launches the live web
+    dashboard (re-using an existing dashboard process when available).
+    """
     global _orch
+
+    # Cleanup any existing swarm
+    if _orch is not None:
+        try:
+            _orch.shutdown()
+            _orch.clear_state()
+        except Exception:
+            pass
+        _orch = None
+
+    # Ensure stale state file is removed even if _orch was None
+    if _state_path.exists():
+        try:
+            _state_path.unlink()
+        except Exception:
+            pass
+
     _orch = SwarmOrchestrator(topology=topology, max_agents=max_agents, state_path=_state_path)
     status = _orch.init_swarm()
+
+    # Auto-launch dashboard — idempotent: won't spawn duplicate servers
+    try:
+        launch_persistent_dashboard(port=0, state_path=_state_path, open_browser=True)
+    except Exception:
+        pass  # Dashboard is optional; don't fail init if browser/server fails
+
     return _swarm_response(status)
 
 
@@ -239,6 +268,34 @@ def agent_list() -> dict[str, Any]:
         "markdown": KimiDisplay.status_to_markdown(status),
         "short": KimiDisplay.short_status(status),
         "todos": _status_to_todos(status),
+    }
+
+
+@mcp.tool()
+def swarm_ui(port: int = 0) -> dict[str, Any]:
+    """Launch the live web dashboard in your browser."""
+    orch = _get_orch()
+    actual_port = launch_persistent_dashboard(
+        port=port, state_path=orch._state_path, open_browser=True
+    )
+    url = f"http://127.0.0.1:{actual_port}"
+    return {
+        "url": url,
+        "port": actual_port,
+        "markdown": f"🌐 **Dashboard opened:** [{url}]({url})\n\n> Live swarm status with real-time updates via Server-Sent Events.",
+        "short": f"Dashboard at {url}",
+    }
+
+
+@mcp.tool()
+def swarm_ui_stop() -> dict[str, Any]:
+    """Stop the live web dashboard."""
+    orch = _get_orch()
+    stop_persistent_dashboard(state_path=orch._state_path)
+    return {
+        "status": "stopped",
+        "markdown": "🔴 **Dashboard stopped.**",
+        "short": "Dashboard stopped",
     }
 
 

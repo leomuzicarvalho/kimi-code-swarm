@@ -1,5 +1,7 @@
 """Tests for kimi_swarm."""
 
+from unittest.mock import patch, MagicMock
+
 import pytest
 
 from kimi_swarm.models import AgentConfig, AgentPhase, SwarmTopology, ContextWindow
@@ -187,3 +189,80 @@ class TestModelMappings:
         assert orch._model_to_context_size("opus") == 256000
         assert orch._model_to_context_size("kimi-k2.6") == 256000
         assert orch._model_to_context_size("unknown") == 32768
+
+
+class TestDashboardIntegration:
+    def test_swarm_init_launches_dashboard(self):
+        """Verify swarm_init auto-launches the live web dashboard."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038) as mock_launch:
+            # Ensure clean state
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            result = mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+
+            mock_launch.assert_called_once_with(
+                port=0, state_path=mcp_server._state_path, open_browser=True
+            )
+            assert result["swarm_id"].startswith("swarm-")
+            assert result["topology"] == "hierarchical"
+            assert result["max_agents"] == 3
+
+    def test_swarm_init_cleans_up_existing_swarm(self):
+        """Verify swarm_init shuts down any existing swarm before creating a new one."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            # First init
+            result1 = mcp_server.swarm_init(topology="mesh", max_agents=2)
+            swarm_id_1 = result1["swarm_id"]
+
+            # Second init should create a new swarm (clean up old one)
+            result2 = mcp_server.swarm_init(topology="hierarchical", max_agents=5)
+            swarm_id_2 = result2["swarm_id"]
+
+            assert swarm_id_1 != swarm_id_2
+            assert result2["topology"] == "hierarchical"
+            assert result2["max_agents"] == 5
+
+    def test_swarm_ui_tool_launches_dashboard(self):
+        """Verify swarm_ui MCP tool launches the dashboard and returns the URL."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=8080) as mock_launch:
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            result = mcp_server.swarm_ui(port=8080)
+
+            assert result["port"] == 8080
+            assert result["url"] == "http://127.0.0.1:8080"
+            assert "Dashboard opened" in result["markdown"]
+            mock_launch.assert_called_with(
+                port=8080, state_path=mcp_server._state_path, open_browser=True
+            )
+
+    def test_swarm_ui_stop_tool_stops_dashboard(self):
+        """Verify swarm_ui_stop MCP tool stops the dashboard."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "stop_persistent_dashboard") as mock_stop:
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            result = mcp_server.swarm_ui_stop()
+
+            assert result["status"] == "stopped"
+            assert "Dashboard stopped" in result["markdown"]
+            mock_stop.assert_called_once_with(state_path=mcp_server._state_path)
