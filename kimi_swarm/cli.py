@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Sequence
 
 from .models import AgentConfig, AgentPhase, SwarmTopology
-from .orchestrator import SwarmOrchestrator
+from .orchestrator import SwarmOrchestrator, DEFAULT_STATE_PATH
 from .display import KimiDisplay
 
 
@@ -16,10 +17,17 @@ from .display import KimiDisplay
 _current_orchestrator: SwarmOrchestrator | None = None
 
 
-def get_orchestrator() -> SwarmOrchestrator:
+def get_orchestrator(require_init: bool = True) -> SwarmOrchestrator:
+    """Get or restore the current orchestrator from persisted state."""
+    global _current_orchestrator
     if _current_orchestrator is None:
-        print("Error: No swarm initialized. Run 'kimi-swarm init' first.", file=sys.stderr)
-        sys.exit(1)
+        # Try to restore from disk
+        orch = SwarmOrchestrator()
+        if orch.load_state():
+            _current_orchestrator = orch
+        elif require_init:
+            print("Error: No swarm initialized. Run 'kimi-swarm init' first.", file=sys.stderr)
+            sys.exit(1)
     return _current_orchestrator
 
 
@@ -39,13 +47,29 @@ def resolve_agent(orch: SwarmOrchestrator, agent_ref: str) -> str:
     sys.exit(1)
 
 
+def auto_status(orch: SwarmOrchestrator, quiet: bool = False, use_markdown: bool = True) -> None:
+    """Automatically print swarm status after a command."""
+    if quiet:
+        return
+    status = orch.get_status()
+    if use_markdown:
+        print("\n" + KimiDisplay.status_to_markdown(status) + "\n")
+    else:
+        print("\n" + KimiDisplay.status_to_rich(status) + "\n")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     global _current_orchestrator
+    # If --force, clear existing state first
+    if args.force:
+        SwarmOrchestrator().clear_state()
+
     orch = SwarmOrchestrator(topology=args.topology, max_agents=args.max_agents)
     status = orch.init_swarm()
     _current_orchestrator = orch
     print(f"✅ Swarm initialized: {status.swarm_id}")
     print(f"   Topology: {status.topology.value} | Max agents: {status.max_agents}")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -62,6 +86,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     resolved = agent.resolved_model if agent.resolved_model != agent.model else agent.model
     print(f"🤖 Agent spawned: {agent.name} ({agent.agent_id})")
     print(f"   Type: {agent.agent_type} | Model: {agent.model} → {resolved} | Phase: {agent.phase.value}")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -70,7 +95,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     status = orch.get_status()
 
     if args.json:
-        # Simple JSON dump of key fields
         data = {
             "swarm_id": status.swarm_id,
             "topology": status.topology.value,
@@ -100,7 +124,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps(data, indent=2))
         return 0
 
-    if args.kimi_display:
+    if args.kimi_display or args.markdown:
         print(KimiDisplay.status_to_markdown(status))
     else:
         print(KimiDisplay.status_to_rich(status))
@@ -117,6 +141,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     print(f"   Tokens used: {result.get('tokens', {}).get('total', 'N/A')}")
     if result.get('result'):
         print(f"   Result: {result['result'][:200]}")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -127,6 +152,7 @@ def cmd_assign(args: argparse.Namespace) -> int:
     task = orch.assign_task(agent_id, args.task)
     print(f"📝 Task assigned to {agent.name}: {task.task_id}")
     print(f"   Description: {task.description}")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -136,6 +162,7 @@ def cmd_progress(args: argparse.Namespace) -> int:
     agent = orch.get_agent(agent_id)
     orch.update_agent_progress(agent_id, args.percent)
     print(f"📊 Updated {agent.name} progress to {args.percent}%")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -145,6 +172,7 @@ def cmd_phase(args: argparse.Namespace) -> int:
     agent = orch.get_agent(agent_id)
     orch.set_agent_phase(agent_id, args.phase)
     print(f"🔖 Set {agent.name} phase to {args.phase}")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -154,6 +182,7 @@ def cmd_terminate(args: argparse.Namespace) -> int:
     agent = orch.get_agent(agent_id)
     orch.terminate_agent(agent_id)
     print(f"🛑 Agent {agent.name} terminated")
+    auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
 
@@ -162,7 +191,33 @@ def cmd_shutdown(args: argparse.Namespace) -> int:
     orch = get_orchestrator()
     status = orch.shutdown()
     print(f"🔴 Swarm {status.swarm_id} shut down")
+    if args.clear_state:
+        orch.clear_state()
     _current_orchestrator = None
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Continuously watch and display swarm status."""
+    orch = get_orchestrator()
+    interval = args.interval
+    use_markdown = args.kimi_display
+
+    try:
+        while True:
+            # Clear screen (ANSI escape sequence)
+            print("\033[2J\033[H", end="")
+            status = orch.get_status()
+            if use_markdown:
+                print(KimiDisplay.status_to_markdown(status))
+            else:
+                print(KimiDisplay.status_to_rich(status))
+            print(f"\n⏱️  Refreshing every {interval}s (Ctrl+C to stop)")
+            time.sleep(interval)
+            # Reload state in case another process modified it
+            orch.load_state()
+    except KeyboardInterrupt:
+        print("\n👋 Watch stopped.")
     return 0
 
 
@@ -214,9 +269,16 @@ def cmd_demo(args: argparse.Namespace) -> int:
     print(KimiDisplay.status_to_markdown(orch.get_status()))
 
     orch.shutdown()
+    orch.clear_state()
     _current_orchestrator = None
     print("\n✅ Demo complete!")
     return 0
+
+
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add common flags shared across subcommands."""
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress auto-status display after command")
+    parser.add_argument("--rich", action="store_true", help="Use rich terminal output instead of markdown")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -230,6 +292,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = subparsers.add_parser("init", help="Initialize a new swarm")
     p_init.add_argument("--topology", choices=["hierarchical", "mesh", "consensus"], default="hierarchical")
     p_init.add_argument("--max-agents", type=int, default=5)
+    p_init.add_argument("--force", action="store_true", help="Force re-initialization (clear existing state)")
+    _add_common_args(p_init)
     p_init.set_defaults(func=cmd_init)
 
     # spawn
@@ -239,46 +303,60 @@ def build_parser() -> argparse.ArgumentParser:
     p_spawn.add_argument("--model", default="inherit", help="Model to use")
     p_spawn.add_argument("--domain", default="", help="Specialization domain")
     p_spawn.add_argument("--task", default="", help="Initial task description")
+    _add_common_args(p_spawn)
     p_spawn.set_defaults(func=cmd_spawn)
 
     # status
     p_status = subparsers.add_parser("status", help="Show swarm status")
     p_status.add_argument("--json", action="store_true", help="Output as JSON")
-    p_status.add_argument("--kimi-display", action="store_true", help="Format for Kimi window (markdown)")
+    p_status.add_argument("--kimi-display", "--markdown", action="store_true", help="Format for Kimi window (markdown)")
     p_status.set_defaults(func=cmd_status)
 
     # assign
     p_assign = subparsers.add_parser("assign", help="Assign a task to an agent")
     p_assign.add_argument("--agent", required=True, help="Agent ID or name")
     p_assign.add_argument("--task", required=True, help="Task description")
+    _add_common_args(p_assign)
     p_assign.set_defaults(func=cmd_assign)
 
     # execute
     p_exec = subparsers.add_parser("execute", help="Execute a task on an agent")
     p_exec.add_argument("--agent", required=True, help="Agent ID or name")
     p_exec.add_argument("--task", required=True, help="Task prompt")
+    _add_common_args(p_exec)
     p_exec.set_defaults(func=cmd_execute)
 
     # progress
     p_prog = subparsers.add_parser("progress", help="Update agent progress")
     p_prog.add_argument("--agent", required=True, help="Agent ID or name")
     p_prog.add_argument("--percent", type=float, required=True, help="Progress 0-100")
+    _add_common_args(p_prog)
     p_prog.set_defaults(func=cmd_progress)
 
     # phase
     p_phase = subparsers.add_parser("phase", help="Set agent phase")
     p_phase.add_argument("--agent", required=True, help="Agent ID or name")
     p_phase.add_argument("--phase", required=True, choices=[p.value for p in AgentPhase])
+    _add_common_args(p_phase)
     p_phase.set_defaults(func=cmd_phase)
 
     # terminate
     p_term = subparsers.add_parser("terminate", help="Terminate an agent")
     p_term.add_argument("--agent", required=True, help="Agent ID or name")
+    _add_common_args(p_term)
     p_term.set_defaults(func=cmd_terminate)
 
     # shutdown
     p_shutdown = subparsers.add_parser("shutdown", help="Shutdown the swarm")
+    p_shutdown.add_argument("--clear-state", action="store_true", help="Remove persisted state file after shutdown")
+    _add_common_args(p_shutdown)
     p_shutdown.set_defaults(func=cmd_shutdown)
+
+    # watch
+    p_watch = subparsers.add_parser("watch", help="Continuously watch swarm status")
+    p_watch.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds")
+    p_watch.add_argument("--kimi-display", "--markdown", action="store_true", help="Use markdown format")
+    p_watch.set_defaults(func=cmd_watch)
 
     # demo
     p_demo = subparsers.add_parser("demo", help="Run a demo swarm")

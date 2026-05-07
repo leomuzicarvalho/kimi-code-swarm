@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .models import (
@@ -20,10 +23,18 @@ from .mcp_client import get_mcp_client, MockMCPClient, RufloMCPClient
 from . import model_mapping
 
 
+DEFAULT_STATE_PATH = Path(".kimi-swarm-state.json")
+
+
 class SwarmOrchestrator:
     """Orchestrates a swarm of agents with lifecycle management."""
 
-    def __init__(self, topology: SwarmTopology | str = SwarmTopology.HIERARCHICAL, max_agents: int = 5) -> None:
+    def __init__(
+        self,
+        topology: SwarmTopology | str = SwarmTopology.HIERARCHICAL,
+        max_agents: int = 5,
+        state_path: Path | str | None = None,
+    ) -> None:
         self.topology = SwarmTopology(topology) if isinstance(topology, str) else topology
         self.max_agents = max_agents
         self.swarm_id: str = ""
@@ -31,6 +42,7 @@ class SwarmOrchestrator:
         self._client = get_mcp_client()
         self._is_active = False
         self._main_context = ContextWindow(used_tokens=0, max_tokens=128000)
+        self._state_path = Path(state_path) if state_path else DEFAULT_STATE_PATH
 
     def init_swarm(self) -> SwarmStatus:
         """Initialize the swarm via MCP."""
@@ -40,6 +52,7 @@ class SwarmOrchestrator:
         )
         self.swarm_id = result.get("swarm_id", f"swarm-{uuid.uuid4().hex[:8]}")
         self._is_active = True
+        self.save_state()
         return self.get_status()
 
     def spawn_agent(self, config: AgentConfig) -> AgentStatus:
@@ -64,6 +77,7 @@ class SwarmOrchestrator:
             context=ContextWindow(used_tokens=0, max_tokens=max_tokens),
         )
         self._agents[agent_id] = agent
+        self.save_state()
         return agent
 
     def assign_task(self, agent_id: str, task_description: str) -> TaskInfo:
@@ -73,6 +87,7 @@ class SwarmOrchestrator:
         agent.task = task
         agent.phase = AgentPhase.PLANNING
         agent.last_active = datetime.now()
+        self.save_state()
         return task
 
     def execute_task(self, agent_id: str, prompt: str) -> dict[str, Any]:
@@ -104,6 +119,7 @@ class SwarmOrchestrator:
             agent.task.completed_at = datetime.now()
 
         agent.phase = AgentPhase.COMPLETED if result.get("status") == "completed" else AgentPhase.FAILED
+        self.save_state()
         return result
 
     def update_agent_progress(self, agent_id: str, progress: float) -> None:
@@ -111,12 +127,14 @@ class SwarmOrchestrator:
         agent = self._get_agent(agent_id)
         if agent.task:
             agent.task.progress_percent = max(0.0, min(100.0, progress))
+        self.save_state()
 
     def set_agent_phase(self, agent_id: str, phase: AgentPhase | str) -> None:
         """Set an agent's phase manually."""
         agent = self._get_agent(agent_id)
         agent.phase = AgentPhase(phase) if isinstance(phase, str) else phase
         agent.last_active = datetime.now()
+        self.save_state()
 
     def get_agent(self, agent_id: str) -> AgentStatus:
         """Get a single agent's status."""
@@ -131,6 +149,7 @@ class SwarmOrchestrator:
         agent = self._get_agent(agent_id)
         self._client.agent_terminate(agent_id)
         agent.phase = AgentPhase.TERMINATED
+        self.save_state()
 
     def shutdown(self) -> SwarmStatus:
         """Shutdown the entire swarm."""
@@ -140,6 +159,7 @@ class SwarmOrchestrator:
         for agent in self._agents.values():
             if agent.phase not in (AgentPhase.TERMINATED, AgentPhase.FAILED):
                 agent.phase = AgentPhase.TERMINATED
+        self.save_state()
         return self.get_status()
 
     def get_status(self) -> SwarmStatus:
@@ -160,6 +180,36 @@ class SwarmOrchestrator:
     def update_main_context(self, used_tokens: int) -> None:
         """Update the main agent's context window tracking."""
         self._main_context.update(used_tokens)
+
+    def save_state(self) -> None:
+        """Persist swarm state to disk."""
+        status = self.get_status()
+        data = status.to_dict()
+        with open(self._state_path, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+
+    def load_state(self) -> bool:
+        """Load swarm state from disk. Returns True if loaded successfully."""
+        if not self._state_path.exists():
+            return False
+        try:
+            with open(self._state_path, "r") as f:
+                data = json.load(f)
+            status = SwarmStatus.from_dict(data)
+            self.swarm_id = status.swarm_id
+            self.topology = status.topology
+            self.max_agents = status.max_agents
+            self._agents = {a.agent_id: a for a in status.agents}
+            self._main_context = status.main_context
+            self._is_active = status.is_active
+            return True
+        except Exception:
+            return False
+
+    def clear_state(self) -> None:
+        """Remove persisted state file."""
+        if self._state_path.exists():
+            self._state_path.unlink()
 
     def _get_agent(self, agent_id: str) -> AgentStatus:
         if agent_id not in self._agents:
