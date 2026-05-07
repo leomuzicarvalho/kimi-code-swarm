@@ -9,3 +9,4 @@ build/
 .venv/
 venv/
 .kimi-swarm-state.json
+.kimi-swarm-dashboard.json

@@ -169,13 +169,287 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# Register MCP server with Kimi Code CLI
+# ------------------------------------------------------------------------------
+KIMI_MCP_JSON="$HOME/.kimi/mcp.json"
+KIMI_DIR="$HOME/.kimi"
+
+if [[ -d "$KIMI_DIR" ]]; then
+    log_info "Kimi Code CLI detected. Registering MCP server ..."
+
+    MCP_REGISTERED=false
+    if [[ -f "$KIMI_MCP_JSON" ]]; then
+        # Backup existing config
+        cp "$KIMI_MCP_JSON" "$KIMI_MCP_JSON.backup.$(date +%s)"
+
+        # Check if already registered
+        if "$PYTHON" -c "import json,sys; d=json.load(open('$KIMI_MCP_JSON')); sys.exit(0 if 'kimi-swarm' in d.get('mcpServers',{}) else 1)" 2>/dev/null; then
+            log_ok "MCP server already registered in $KIMI_MCP_JSON"
+            MCP_REGISTERED=true
+        else
+            # Add kimi-swarm to existing mcpServers
+            "$PYTHON" -c "
+import json
+with open('$KIMI_MCP_JSON') as f:
+    config = json.load(f)
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+config['mcpServers']['kimi-swarm'] = {
+    'command': '$PYTHON',
+    'args': ['-m', 'kimi_swarm.mcp_server'],
+    'autoStart': True
+}
+with open('$KIMI_MCP_JSON', 'w') as f:
+    json.dump(config, f, indent=2)
+print('Added kimi-swarm to mcpServers')
+" 2>/dev/null && {
+                log_ok "MCP server registered in $KIMI_MCP_JSON"
+                MCP_REGISTERED=true
+            }
+        fi
+    else
+        # Create new mcp.json
+        "$PYTHON" -c "
+import json
+config = {'mcpServers': {'kimi-swarm': {
+    'command': '$PYTHON',
+    'args': ['-m', 'kimi_swarm.mcp_server'],
+    'autoStart': True
+}}}
+with open('$KIMI_MCP_JSON', 'w') as f:
+    json.dump(config, f, indent=2)
+print('Created mcp.json with kimi-swarm server')
+" 2>/dev/null && {
+            log_ok "Created $KIMI_MCP_JSON with kimi-swarm MCP server"
+            MCP_REGISTERED=true
+        }
+    fi
+
+        if [[ "$MCP_REGISTERED" != "true" ]]; then
+        log_warn "Could not automatically register MCP server."
+        log_info "Add this manually to $KIMI_MCP_JSON:"
+        cat <<EOF
+{
+  "mcpServers": {
+    "kimi-swarm": {
+      "command": "$PYTHON",
+      "args": ["-m", "kimi_swarm.mcp_server"],
+      "autoStart": true
+    }
+  }
+}
+EOF
+    fi
+
+    # --------------------------------------------------------------------------
+    # Install skill file
+    # --------------------------------------------------------------------------
+    SKILL_DIR="$HOME/.kimi/skills/kimi-swarm"
+    mkdir -p "$SKILL_DIR"
+    cat > "$SKILL_DIR/SKILL.md" <<'SKILLEOF'
+---
+name: kimi-swarm
+description: Orchestrate multi-agent swarms using the kimi-swarm MCP server. Spawn agents, manage tasks, track progress, and monitor context windows across agents. Use when the user asks about swarms, agents, distributed tasks, parallel coding, or wants to view swarm status.
+---
+
+# Kimi Swarm Orchestration
+
+Coordinate intelligent multi-agent swarms via the `kimi-swarm` MCP server.
+
+## Startup Status
+
+To see swarm status automatically when starting a session, add a `SessionStart` hook in `~/.kimi/config.toml`:
+
+```toml
+[[hooks]]
+event = "SessionStart"
+matcher = "startup|resume"
+command = """python3 -c "import json,sys,os,subprocess; d=json.load(sys.stdin); c=d.get('cwd',''); p=os.path.join(c,'.kimi-swarm-state.json'); os.path.exists(p) and (print('\n🐝 Active swarm detected in',c), subprocess.run(['kimi-swarm','status','--kimi-display'],cwd=c))" """
+```
+
+If you see swarm status at startup, the swarm is already active and ready for commands.
+
+## Sticky Live Status (Todo List Sync)
+
+**Every swarm tool response now includes a `todos` array.** After **every** swarm operation (`swarm_init`, `agent_spawn`, `agent_execute`, `agent_assign`, `agent_progress`, `agent_phase`, `agent_terminate`, `swarm_shutdown`), call `SetTodoList` with the `todos` from the response. This keeps an up-to-date swarm status pinned in Kimi's toolbar (web UI) and as a display block in the conversation (shell UI).
+
+Example workflow:
+```
+swarm_init(topology="hierarchical", max_agents=5)
+→ response contains todos → SetTodoList(todos=response.todos)
+
+agent_spawn(agent_type="coder", name="fe-dev", model="sonnet")
+→ response contains todos → SetTodoList(todos=response.todos)
+```
+
+The todo list shows:
+- Swarm header with agent count and overall progress
+- Each agent as a todo item with phase and progress bar
+- Auto-updating status as agents move through phases
+
+## Available MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `swarm_init` | Create a new swarm (hierarchical/mesh/consensus) |
+| `swarm_status` | Get full status with markdown + todo-sync data |
+| `swarm_shutdown` | Shutdown swarm, optionally clear state |
+| `agent_spawn` | Spawn an agent with type, name, model |
+| `agent_execute` | Run a task on an agent |
+| `agent_assign` | Assign a task without executing |
+| `agent_progress` | Update agent progress 0-100 |
+| `agent_phase` | Set agent phase (idle/planning/executing/etc) |
+| `agent_terminate` | Terminate an agent |
+| `agent_list` | List all agents |
+| `swarm_demo` | Run a quick demo swarm |
+
+## Model Mapping
+
+| Alias | Resolved Kimi Model | Context |
+|-------|---------------------|---------|
+| `haiku` | `moonshot-v1-8k` | 8,192 |
+| `sonnet` | `kimi-k2.6` | 256,000 |
+| `opus` | `kimi-k2-0712-preview` | 128,000 |
+| `inherit` | `kimi-k2.6` | 256,000 |
+
+## Core Workflow
+
+1. **Initialize**: `swarm_init` with topology and max_agents
+2. **Sync todos**: `SetTodoList(todos=response.todos)` ← always do this
+3. **Spawn agents**: `agent_spawn` for each role
+4. **Sync todos**: `SetTodoList(todos=response.todos)` ← always do this
+5. **Execute**: `agent_execute` or `agent_assign` + `agent_progress`
+6. **Sync todos**: `SetTodoList(todos=response.todos)` ← always do this
+7. **Monitor**: `swarm_status` anytime; sync todos to refresh sticky display
+8. **Cleanup**: `swarm_shutdown` when done
+
+## Quick Patterns
+
+**Parallel coding swarm:**
+```
+swarm_init(topology="hierarchical", max_agents=5)
+SetTodoList(todos=response.todos)
+agent_spawn(agent_type="architect", name="arch-1", model="sonnet")
+SetTodoList(todos=response.todos)
+agent_spawn(agent_type="coder", name="fe-dev", model="sonnet")
+SetTodoList(todos=response.todos)
+agent_spawn(agent_type="coder", name="be-dev", model="haiku")
+SetTodoList(todos=response.todos)
+agent_spawn(agent_type="tester", name="qa-1", model="haiku")
+SetTodoList(todos=response.todos)
+agent_spawn(agent_type="reviewer", name="sec-1", model="sonnet")
+SetTodoList(todos=response.todos)
+agent_execute(agent_id="fe-dev-id", prompt="Build login page")
+SetTodoList(todos=response.todos)
+agent_execute(agent_id="be-dev-id", prompt="Implement auth API")
+SetTodoList(todos=response.todos)
+```
+
+## Display
+
+Always render the `markdown` field from `swarm_status` or `swarm_init` directly — it contains a formatted table with progress bars, context usage, and phase emojis. Additionally, always sync the `todos` array to `SetTodoList` so the swarm status stays sticky and live-updating in the conversation window.
+SKILLEOF
+    log_ok "Skill installed to $SKILL_DIR/SKILL.md"
+
+    # --------------------------------------------------------------------------
+    # Install startup hook
+    # --------------------------------------------------------------------------
+    HOOK_DIR="$HOME/.kimi/hooks"
+    mkdir -p "$HOOK_DIR"
+    cat > "$HOOK_DIR/swarm-startup.sh" <<'HOOKEOF'
+#!/bin/bash
+# Kimi Swarm Startup Hook — auto-displays swarm status on SessionStart
+# Reads hook context from stdin, checks for active swarm, outputs markdown status.
+
+read -r JSON
+
+CWD=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
+SOURCE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('source','startup'))" 2>/dev/null)
+
+if [ -z "$CWD" ]; then
+    CWD="$(pwd)"
+fi
+
+STATE_FILE="$CWD/.kimi-swarm-state.json"
+
+if [ ! -f "$STATE_FILE" ]; then
+    # No active swarm in this directory — silent exit
+    exit 0
+fi
+
+# Check if swarm is active
+IS_ACTIVE=$(python3 -c "
+import json, sys
+try:
+    with open('$STATE_FILE') as f:
+        data = json.load(f)
+    print('true' if data.get('is_active', False) else 'false')
+except:
+    print('false')
+")
+
+if [ "$IS_ACTIVE" != "true" ]; then
+    exit 0
+fi
+
+# Output swarm status markdown using the installed CLI
+echo ""
+echo "🐝 **Active Swarm Detected**"
+echo ""
+
+kimi-swarm status --kimi-display 2>/dev/null
+
+exit 0
+HOOKEOF
+    chmod +x "$HOOK_DIR/swarm-startup.sh"
+    log_ok "Startup hook installed to $HOOK_DIR/swarm-startup.sh"
+
+    # --------------------------------------------------------------------------
+    # Check config.toml for SessionStart hook
+    # --------------------------------------------------------------------------
+    KIMI_CONFIG="$HOME/.kimi/config.toml"
+    if [[ -f "$KIMI_CONFIG" ]]; then
+        if grep -q "swarm-startup.sh" "$KIMI_CONFIG" 2>/dev/null; then
+            log_ok "SessionStart hook already configured in config.toml"
+        else
+            log_warn "SessionStart hook not found in ~/.kimi/config.toml"
+            log_info "Add this to get auto-status on session resume:"
+            cat <<'EOF'
+
+[[hooks]]
+event = "SessionStart"
+matcher = "startup|resume"
+command = "bash /Users/leonardomuzi/.kimi/hooks/swarm-startup.sh"
+timeout = 10
+
+EOF
+        fi
+    else
+        log_warn "~/.kimi/config.toml not found. Cannot verify SessionStart hook."
+    fi
+else
+    log_info "Kimi Code CLI not detected (~/.kimi not found). MCP server not registered."
+    log_info "If you use Kimi Code CLI, manually add the server to ~/.kimi/mcp.json"
+fi
+
+# ------------------------------------------------------------------------------
 # Quick smoke test
 # ------------------------------------------------------------------------------
-log_info "Running smoke test ..."
+log_info "Running smoke tests ..."
+
+# CLI smoke test
 if kimi-swarm demo >/dev/null 2>&1; then
-    log_ok "Smoke test passed!"
+    log_ok "CLI smoke test passed!"
 else
-    log_warn "Smoke test had issues (expected if no swarm is active)."
+    log_warn "CLI smoke test had issues (expected if no swarm is active)."
+fi
+
+# MCP server smoke test
+if "$PYTHON" -c "from kimi_swarm.mcp_server import main; print('MCP server import OK')" 2>/dev/null; then
+    log_ok "MCP server import test passed!"
+else
+    log_err "MCP server import failed. The 'mcp' package may be missing."
+    log_info "Try: $PYTHON -m pip install mcp"
 fi
 
 # ------------------------------------------------------------------------------

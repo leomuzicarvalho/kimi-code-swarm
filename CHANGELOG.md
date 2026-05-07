@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Missing `mcp` dependency** — Added `mcp>=1.0.0` to `pyproject.toml` so the MCP server imports correctly in fresh environments.
+- **`install.sh` now bootstraps full Kimi Code CLI integration** — Previously only installed the Python package and registered the MCP server. Now it also:
+  - Installs the `kimi-swarm` skill file to `~/.kimi/skills/kimi-swarm/SKILL.md`
+  - Installs the session-startup hook to `~/.kimi/hooks/swarm-startup.sh`
+  - Checks `~/.kimi/config.toml` for the `SessionStart` hook entry and warns if missing
+
 ### Added
 
 - **Rich agent details in live web dashboard** — Agent cards now display:
