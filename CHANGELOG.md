@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`--version` flag missing from CLI** — `kimi-swarm --version` now correctly outputs `kimi-swarm 0.1.0`. Previously the flag was unimplemented, causing the install script to display `Version: unknown`.
+- **MCP dependency not auto-installed** — `install.sh` now explicitly checks if the `mcp` package is importable and installs it if missing. Previously, installing from git+https with older pip could leave the `mcp` dependency unresolved, causing the MCP server smoke test to fail with "The 'mcp' package may be missing."
 - **Missing `mcp` dependency** — Added `mcp>=1.0.0` to `pyproject.toml` so the MCP server imports correctly in fresh environments.
 - **`install.sh` now bootstraps full Kimi Code CLI integration** — Previously only installed the Python package and registered the MCP server. Now it also:
   - Installs the `kimi-swarm` skill file to `~/.kimi/skills/kimi-swarm/SKILL.md`

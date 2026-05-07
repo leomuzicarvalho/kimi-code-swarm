@@ -433,22 +433,35 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# Ensure MCP dependency is available
+# ------------------------------------------------------------------------------
+log_info "Checking MCP dependency ..."
+if ! "$PYTHON" -c "import mcp" 2>/dev/null; then
+    log_warn "MCP package not found. Installing explicitly ..."
+    "$PYTHON" -m pip install "mcp>=1.0.0" --quiet
+fi
+
+# ------------------------------------------------------------------------------
 # Quick smoke test
 # ------------------------------------------------------------------------------
 log_info "Running smoke tests ..."
 
 # CLI smoke test
-if kimi-swarm demo >/dev/null 2>&1; then
+CLI_DEMO_OUTPUT=$(kimi-swarm demo 2>&1) || true
+if echo "$CLI_DEMO_OUTPUT" | grep -q "Demo complete"; then
     log_ok "CLI smoke test passed!"
 else
     log_warn "CLI smoke test had issues (expected if no swarm is active)."
 fi
 
 # MCP server smoke test
-if "$PYTHON" -c "from kimi_swarm.mcp_server import main; print('MCP server import OK')" 2>/dev/null; then
+MCP_IMPORT_OUTPUT=$("$PYTHON" -c "from kimi_swarm.mcp_server import main; print('MCP server import OK')" 2>&1) || true
+if echo "$MCP_IMPORT_OUTPUT" | grep -q "MCP server import OK"; then
     log_ok "MCP server import test passed!"
 else
     log_err "MCP server import failed. The 'mcp' package may be missing."
+    log_info "Diagnostics:"
+    echo "  $MCP_IMPORT_OUTPUT"
     log_info "Try: $PYTHON -m pip install mcp"
 fi
 

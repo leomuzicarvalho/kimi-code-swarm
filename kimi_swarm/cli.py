@@ -8,6 +8,7 @@ import sys
 import time
 from typing import Sequence
 
+from . import __version__
 from .models import AgentConfig, AgentPhase, SwarmTopology
 from .orchestrator import SwarmOrchestrator, DEFAULT_STATE_PATH
 from .display import KimiDisplay
@@ -330,6 +331,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kimi-swarm",
         description="Swarm orchestration CLI for Kimi Code",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
