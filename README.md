@@ -83,9 +83,33 @@ The Ruflo-Kimi Bridge auto-selects the execution backend:
 
 ## Installation on Kimi Code
 
-### Option A: Install in the Same Environment as Kimi Code
+### One-liner Install (Recommended)
 
-If you have terminal access to the machine running Kimi Code:
+Run this **inside the terminal of your Kimi Code instance** (or any shell that shares the same Python environment):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/install.sh | bash
+```
+
+This detects your Python, installs `kimi-swarm` into the **current environment only**, and verifies the CLI is available immediately. No sudo, no system-wide changes.
+
+#### Install Options
+
+```bash
+# Install into current environment (default)
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/install.sh | bash
+
+# Install into a dedicated virtualenv (isolated)
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/install.sh | bash -s -- --venv ~/.venvs/kimi-swarm
+
+# Install from a specific branch
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/install.sh | bash -s -- --branch dev
+
+# Install for current user only (no root)
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/install.sh | bash -s -- --user
+```
+
+### Manual Install (if you prefer)
 
 ```bash
 git clone git@github.com:leomuzicarvalho/kimi-code-swarm.git
@@ -93,11 +117,9 @@ cd kimi-code-swarm
 pip install -e ".[dev]"
 ```
 
-This makes `kimi-swarm` available as a CLI command globally.
+### Use as a Python Module Within Kimi Code
 
-### Option B: Use as a Python Module Within Kimi Code
-
-Since Kimi Code can run Python inline, you can also import the framework directly in a Kimi session:
+If you don't want the CLI and just want to import the framework directly in a Kimi session:
 
 ```python
 # In Kimi Code's terminal or a Python cell
@@ -108,12 +130,6 @@ from kimi_swarm import SwarmOrchestrator, AgentConfig, KimiDisplay
 
 orch = SwarmOrchestrator(topology="hierarchical", max_agents=5)
 orch.init_swarm()
-```
-
-### Option C: pip install from GitHub
-
-```bash
-pip install git+ssh://git@github.com/leomuzicarvalho/kimi-code-swarm.git
 ```
 
 ---
