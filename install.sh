@@ -174,6 +174,9 @@ fi
 KIMI_MCP_JSON="$HOME/.kimi/mcp.json"
 KIMI_DIR="$HOME/.kimi"
 
+# Ensure Kimi config directory exists
+mkdir -p "$KIMI_DIR"
+
 if [[ -d "$KIMI_DIR" ]]; then
     log_info "Kimi Code CLI detected. Registering MCP server ..."
 
@@ -182,13 +185,8 @@ if [[ -d "$KIMI_DIR" ]]; then
         # Backup existing config
         cp "$KIMI_MCP_JSON" "$KIMI_MCP_JSON.backup.$(date +%s)"
 
-        # Check if already registered
-        if "$PYTHON" -c "import json,sys; d=json.load(open('$KIMI_MCP_JSON')); sys.exit(0 if 'kimi-swarm' in d.get('mcpServers',{}) else 1)" 2>/dev/null; then
-            log_ok "MCP server already registered in $KIMI_MCP_JSON"
-            MCP_REGISTERED=true
-        else
-            # Add kimi-swarm to existing mcpServers
-            "$PYTHON" -c "
+        # Always update/add kimi-swarm entry so path stays correct on reinstalls
+        "$PYTHON" -c "
 import json
 with open('$KIMI_MCP_JSON') as f:
     config = json.load(f)
@@ -201,12 +199,11 @@ config['mcpServers']['kimi-swarm'] = {
 }
 with open('$KIMI_MCP_JSON', 'w') as f:
     json.dump(config, f, indent=2)
-print('Added kimi-swarm to mcpServers')
+print('Updated kimi-swarm in mcpServers')
 " 2>/dev/null && {
-                log_ok "MCP server registered in $KIMI_MCP_JSON"
-                MCP_REGISTERED=true
+            log_ok "MCP server registered in $KIMI_MCP_JSON"
+            MCP_REGISTERED=true
             }
-        fi
     else
         # Create new mcp.json
         "$PYTHON" -c "
@@ -264,7 +261,7 @@ To see swarm status automatically when starting a session, add a `SessionStart` 
 [[hooks]]
 event = "SessionStart"
 matcher = "startup|resume"
-command = """python3 -c "import json,sys,os,subprocess; d=json.load(sys.stdin); c=d.get('cwd',''); p=os.path.join(c,'.kimi-swarm-state.json'); os.path.exists(p) and (print('\n🐝 Active swarm detected in',c), subprocess.run(['kimi-swarm','status','--kimi-display'],cwd=c))" """
+command = """python3 -c "import json,sys,os,subprocess; p=os.path.expanduser('~/.kimi/kimi-swarm-state.json'); os.path.exists(p) and (print('\n🐝 Active swarm detected'), subprocess.run(['kimi-swarm','status','--kimi-display']))" """
 ```
 
 If you see swarm status at startup, the swarm is already active and ready for commands.
@@ -363,17 +360,10 @@ SKILLEOF
 
 read -r JSON
 
-CWD=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
-SOURCE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('source','startup'))" 2>/dev/null)
-
-if [ -z "$CWD" ]; then
-    CWD="$(pwd)"
-fi
-
-STATE_FILE="$CWD/.kimi-swarm-state.json"
+STATE_FILE="$HOME/.kimi/kimi-swarm-state.json"
 
 if [ ! -f "$STATE_FILE" ]; then
-    # No active swarm in this directory — silent exit
+    # No active swarm — silent exit
     exit 0
 fi
 

@@ -15,7 +15,7 @@ To see swarm status automatically when starting a session, add a `SessionStart` 
 [[hooks]]
 event = "SessionStart"
 matcher = "startup|resume"
-command = """python3 -c "import json,sys,os,subprocess; d=json.load(sys.stdin); c=d.get('cwd',''); p=os.path.join(c,'.kimi-swarm-state.json'); os.path.exists(p) and (print('\n🐝 Active swarm detected in',c), subprocess.run(['kimi-swarm','status','--kimi-display'],cwd=c))" """
+command = """python3 -c "import json,sys,os,subprocess; p=os.path.expanduser('~/.kimi/kimi-swarm-state.json'); os.path.exists(p) and (print('\n🐝 Active swarm detected'), subprocess.run(['kimi-swarm','status','--kimi-display']))" """
 ```
 
 If you see swarm status at startup, the swarm is already active and ready for commands.

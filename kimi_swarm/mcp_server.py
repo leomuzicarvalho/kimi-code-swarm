@@ -340,6 +340,7 @@ def main() -> None:
     if path := os.environ.get("KIMI_SWARM_STATE_PATH"):
         _state_path = Path(path)
 
+    _state_path.parent.mkdir(parents=True, exist_ok=True)
     mcp.run(transport="stdio")
 
 

@@ -7,14 +7,10 @@ read -r JSON
 CWD=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
 SOURCE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('source','startup'))" 2>/dev/null)
 
-if [ -z "$CWD" ]; then
-    CWD="$(pwd)"
-fi
-
-STATE_FILE="$CWD/.kimi-swarm-state.json"
+STATE_FILE="$HOME/.kimi/kimi-swarm-state.json"
 
 if [ ! -f "$STATE_FILE" ]; then
-    # No active swarm in this directory — silent exit
+    # No active swarm — silent exit
     exit 0
 fi
 

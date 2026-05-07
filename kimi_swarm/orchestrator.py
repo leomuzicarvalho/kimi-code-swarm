@@ -23,7 +23,7 @@ from .mcp_client import SwarmMCPClient
 from . import model_mapping
 
 
-DEFAULT_STATE_PATH = Path(".kimi-swarm-state.json")
+DEFAULT_STATE_PATH = Path.home() / ".kimi" / "kimi-swarm-state.json"
 
 
 class SwarmOrchestrator:
@@ -183,6 +183,7 @@ class SwarmOrchestrator:
 
     def save_state(self) -> None:
         """Persist swarm state to disk."""
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         status = self.get_status()
         data = status.to_dict()
         with open(self._state_path, "w") as f:

@@ -20,8 +20,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
-DEFAULT_STATE_PATH = Path(".kimi-swarm-state.json")
-DASHBOARD_META_PATH = Path(".kimi-swarm-dashboard.json")
+DEFAULT_STATE_PATH = Path.home() / ".kimi" / "kimi-swarm-state.json"
+DASHBOARD_META_PATH = Path.home() / ".kimi" / "kimi-swarm-dashboard.json"
 
 # ---------------------------------------------------------------------------
 # HTML Dashboard (embedded so zero external deps)
@@ -1008,7 +1008,7 @@ def _meta_path(state_path: Path | str | None = None) -> Path:
     """Path to the dashboard metadata file (port + pid)."""
     if state_path:
         p = Path(state_path)
-        return p.parent / ".kimi-swarm-dashboard.json"
+        return p.parent / "kimi-swarm-dashboard.json"
     return DASHBOARD_META_PATH
 
 
