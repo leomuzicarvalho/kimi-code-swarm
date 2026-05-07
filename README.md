@@ -20,6 +20,8 @@ Kimi Swarm lets you spin up a **team of specialized AI agents** (coders, testers
 
 All of this renders as a **markdown table directly in Kimi's chat window** so you can see the entire swarm state at a glance.
 
+🌐 **New: Live Web Dashboard** — Add `--ui` to any command (or run `kimi-swarm ui`) to open a beautiful, real-time browser dashboard with animated agent cards, token gauges, and an overall progress ring. The dashboard auto-updates via Server-Sent Events and persists across CLI commands.
+
 ---
 
 ## How It Works
@@ -137,14 +139,17 @@ kimi-swarm spawn --type reviewer  --name sec   --model sonnet
 # 3. View status in Kimi's window (markdown table)
 kimi-swarm status --kimi-display
 
-# 4. Execute tasks
-kimi-swarm execute --agent fe --task "Build a login page with OAuth"
-kimi-swarm execute --agent be --task "Create JWT auth middleware"
+# 4. Open the live web dashboard
+kimi-swarm ui
 
-# 5. Check progress again
+# 5. Execute tasks (with dashboard auto-opening)
+kimi-swarm execute --agent fe --task "Build a login page with OAuth" --ui
+kimi-swarm execute --agent be --task "Create JWT auth middleware" --ui
+
+# 6. Check progress again
 kimi-swarm status --kimi-display
 
-# 6. Shutdown
+# 7. Shutdown
 kimi-swarm shutdown
 ```
 
@@ -215,6 +220,34 @@ Running `kimi-swarm status --kimi-display` outputs a markdown table that renders
 
 ---
 
+## Live Web Dashboard
+
+The web dashboard opens in your default browser and stays live as long as the swarm is active. It features:
+
+- 🎨 **Dark glassmorphism UI** with animated particle network background
+- 📊 **Circular progress ring** showing overall swarm completion
+- 🤖 **Live agent cards** with phase colors, pulse animations, and smooth progress bars
+- 📈 **Token usage visualization** — total, completion, and context window bars
+- 🟢 **Connection status** indicator with auto-reconnect
+- 🔴 **Offline overlay** when no swarm is detected
+
+```bash
+# Open dashboard for existing swarm
+kimi-swarm ui
+
+# Auto-open dashboard on any command
+kimi-swarm init --ui
+kimi-swarm spawn --type coder --name fe --ui
+kimi-swarm execute --agent fe --task "Build auth" --ui
+
+# Custom port
+kimi-swarm init --ui --port 8080
+```
+
+The dashboard runs as a **persistent background process** — it survives individual CLI commands and only stops when you run `kimi-swarm shutdown`.
+
+---
+
 ## Sticky Live Status via Todo Sync
 
 When using the **MCP server** inside Kimi Code, every swarm tool response includes a `todos` array. The AI syncs this to `SetTodoList` after each operation, giving you a live-updating status panel:
@@ -230,15 +263,18 @@ Each agent maps to a todo item with its phase and a visual progress bar (`██
 
 | Command | Description |
 |---------|-------------|
-| `kimi-swarm init` | Create a new swarm |
-| `kimi-swarm spawn` | Add an agent |
+| Command | Description |
+|---------|-------------|
+| `kimi-swarm init` | Create a new swarm (`--ui` to open dashboard) |
+| `kimi-swarm spawn` | Add an agent (`--ui` to open dashboard) |
 | `kimi-swarm status` | Show swarm status (`--kimi-display` for markdown, `--json` for JSON) |
 | `kimi-swarm assign` | Give an agent a task without executing |
-| `kimi-swarm execute` | Run a task on an agent |
+| `kimi-swarm execute` | Run a task on an agent (`--ui` to open dashboard) |
 | `kimi-swarm progress` | Manually update an agent's progress % |
 | `kimi-swarm phase` | Manually set an agent's phase |
 | `kimi-swarm terminate` | Kill an agent |
-| `kimi-swarm shutdown` | Tear down the entire swarm |
+| `kimi-swarm shutdown` | Tear down the entire swarm (stops dashboard) |
+| `kimi-swarm ui` | Open the live web dashboard for the current swarm |
 | `kimi-swarm demo` | Run a full demo with sample agents and tasks |
 
 ---

@@ -249,6 +249,10 @@ class SwarmStatus:
             "main_context": self.main_context.to_dict(),
             "created_at": self.created_at.isoformat(),
             "is_active": self.is_active,
+            "overall_progress": self.overall_progress,
+            "active_agents": self.active_agents,
+            "completed_tasks": self.completed_tasks,
+            "total_tasks": self.total_tasks,
         }
 
     @classmethod

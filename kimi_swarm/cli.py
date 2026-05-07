@@ -11,6 +11,12 @@ from typing import Sequence
 from .models import AgentConfig, AgentPhase, SwarmTopology
 from .orchestrator import SwarmOrchestrator, DEFAULT_STATE_PATH
 from .display import KimiDisplay
+from .web_dashboard import (
+    start_dashboard,
+    stop_dashboard,
+    launch_persistent_dashboard,
+    stop_persistent_dashboard,
+)
 
 
 # Global orchestrator instance for CLI session
@@ -47,6 +53,16 @@ def resolve_agent(orch: SwarmOrchestrator, agent_ref: str) -> str:
     sys.exit(1)
 
 
+def _maybe_open_ui(orch: SwarmOrchestrator, ui: bool, port: int) -> None:
+    """Launch the web dashboard if requested."""
+    if not ui:
+        return
+    actual_port = launch_persistent_dashboard(
+        port=port, state_path=orch._state_path, open_browser=True
+    )
+    print(f"🌐 Dashboard running at http://127.0.0.1:{actual_port}")
+
+
 def auto_status(orch: SwarmOrchestrator, quiet: bool = False, use_markdown: bool = True) -> None:
     """Automatically print swarm status after a command."""
     if quiet:
@@ -69,6 +85,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     _current_orchestrator = orch
     print(f"✅ Swarm initialized: {status.swarm_id}")
     print(f"   Topology: {status.topology.value} | Max agents: {status.max_agents}")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -86,6 +103,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     resolved = agent.resolved_model if agent.resolved_model != agent.model else agent.model
     print(f"🤖 Agent spawned: {agent.name} ({agent.agent_id})")
     print(f"   Type: {agent.agent_type} | Model: {agent.model} → {resolved} | Phase: {agent.phase.value}")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -141,6 +159,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     print(f"   Tokens used: {result.get('tokens', {}).get('total', 'N/A')}")
     if result.get('result'):
         print(f"   Result: {result['result'][:200]}")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -152,6 +171,7 @@ def cmd_assign(args: argparse.Namespace) -> int:
     task = orch.assign_task(agent_id, args.task)
     print(f"📝 Task assigned to {agent.name}: {task.task_id}")
     print(f"   Description: {task.description}")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -162,6 +182,7 @@ def cmd_progress(args: argparse.Namespace) -> int:
     agent = orch.get_agent(agent_id)
     orch.update_agent_progress(agent_id, args.percent)
     print(f"📊 Updated {agent.name} progress to {args.percent}%")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -172,6 +193,7 @@ def cmd_phase(args: argparse.Namespace) -> int:
     agent = orch.get_agent(agent_id)
     orch.set_agent_phase(agent_id, args.phase)
     print(f"🔖 Set {agent.name} phase to {args.phase}")
+    _maybe_open_ui(orch, args.ui, args.port)
     auto_status(orch, quiet=args.quiet, use_markdown=not args.rich)
     return 0
 
@@ -193,6 +215,8 @@ def cmd_shutdown(args: argparse.Namespace) -> int:
     print(f"🔴 Swarm {status.swarm_id} shut down")
     if args.clear_state:
         orch.clear_state()
+    stop_dashboard()
+    stop_persistent_dashboard(state_path=orch._state_path)
     _current_orchestrator = None
     return 0
 
@@ -229,6 +253,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     orch = SwarmOrchestrator(topology="hierarchical", max_agents=5)
     status = orch.init_swarm()
     _current_orchestrator = orch
+    _maybe_open_ui(orch, args.ui, args.port)
     print(KimiDisplay.status_to_markdown(status))
     print("\n")
 
@@ -270,8 +295,26 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
     orch.shutdown()
     orch.clear_state()
+    stop_dashboard()
     _current_orchestrator = None
     print("\n✅ Demo complete!")
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Open the web dashboard for the current swarm."""
+    orch = get_orchestrator()
+    actual_port = start_dashboard(
+        port=args.port, state_path=orch._state_path, open_browser=True
+    )
+    print(f"🌐 Dashboard running at http://127.0.0.1:{actual_port}")
+    print("Press Ctrl+C to stop the dashboard server.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n👋 Dashboard stopped.")
+        stop_dashboard()
     return 0
 
 
@@ -279,6 +322,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add common flags shared across subcommands."""
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress auto-status display after command")
     parser.add_argument("--rich", action="store_true", help="Use rich terminal output instead of markdown")
+    parser.add_argument("--ui", action="store_true", help="Open live web dashboard in browser")
+    parser.add_argument("--port", type=int, default=0, help="Dashboard port (0 = auto-assign)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -358,8 +403,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--kimi-display", "--markdown", action="store_true", help="Use markdown format")
     p_watch.set_defaults(func=cmd_watch)
 
+    # ui
+    p_ui = subparsers.add_parser("ui", help="Open the live web dashboard")
+    p_ui.add_argument("--port", type=int, default=0, help="Dashboard port (0 = auto-assign)")
+    p_ui.set_defaults(func=cmd_ui)
+
     # demo
     p_demo = subparsers.add_parser("demo", help="Run a demo swarm")
+    p_demo.add_argument("--ui", action="store_true", help="Open live web dashboard in browser")
+    p_demo.add_argument("--port", type=int, default=0, help="Dashboard port (0 = auto-assign)")
     p_demo.set_defaults(func=cmd_demo)
 
     return parser
