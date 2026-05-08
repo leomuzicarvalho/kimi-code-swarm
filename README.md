@@ -177,6 +177,34 @@ orch.init_swarm()
 
 ---
 
+## Uninstall
+
+To completely remove Kimi Swarm and all its integrations:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/uninstall.sh | bash
+```
+
+This removes the Python package, MCP server registration, skill file, and startup hook.
+
+| Option | Effect |
+|--------|--------|
+| `--yes` | Skip confirmation and uninstall immediately |
+| `--purge` | Also remove swarm state file and `mcp.json` backups |
+
+```bash
+# Interactive uninstall (shows summary, asks for confirmation)
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/uninstall.sh | bash
+
+# Uninstall without prompts
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/uninstall.sh | bash -s -- --yes
+
+# Full cleanup including state and backups
+curl -sSL https://raw.githubusercontent.com/leomuzicarvalho/kimi-code-swarm/main/uninstall.sh | bash -s -- --yes --purge
+```
+
+---
+
 ## Quick Start
 
 ### CLI Usage
