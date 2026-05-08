@@ -99,7 +99,29 @@ If you're using the local `.venv` from this repo, point to it directly:
 }
 ```
 
-The [install.sh](#one-liner-install-recommended) script handles this automatically by detecting and pinning the absolute Python path.
+### Apple Silicon Macs (M1/M2/M3/M4)
+
+On Apple Silicon with a **universal Python binary** (e.g., from python.org), the MCP server may fail with:
+
+```
+ImportError: dlopen(...): mach-o file, but is an incompatible architecture
+```
+
+This happens when Python packages with native extensions (like `pydantic-core`) are installed for one architecture (e.g., x86_64 under Rosetta) but the MCP server runs as another (arm64). To force the MCP server to always run as **arm64** (matching Apple Silicon hardware), wrap the command with `arch`:
+
+```json
+{
+  "mcpServers": {
+    "kimi-swarm": {
+      "command": "arch",
+      "args": ["-arm64", "/absolute/path/to/your/python3", "-m", "kimi_swarm.mcp_server"],
+      "autoStart": true
+    }
+  }
+}
+```
+
+The [install.sh](#one-liner-install-recommended) script automatically detects this situation and writes the `arch -arm64` wrapper for you.
 
 ---
 

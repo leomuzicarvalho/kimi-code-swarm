@@ -262,7 +262,16 @@ if [[ -d "$KIMI_DIR" ]]; then
         # Backup existing config
         cp "$KIMI_MCP_JSON" "$KIMI_MCP_JSON.backup.$(date +%s)"
 
-        # Always update/add kimi-swarm entry so path stays correct on reinstalls
+        # Determine MCP command/args (Apple Silicon needs arch -arm64 prefix)
+    if [[ "$ARCH_FIX_NEEDED" == "true" ]]; then
+        MCP_CMD="arch"
+        MCP_ARGS="['-arm64', '$PYTHON', '-m', 'kimi_swarm.mcp_server']"
+    else
+        MCP_CMD="$PYTHON"
+        MCP_ARGS="['-m', 'kimi_swarm.mcp_server']"
+    fi
+
+    # Always update/add kimi-swarm entry so path stays correct on reinstalls
         "$PYTHON" -c "
 import json
 with open('$KIMI_MCP_JSON') as f:
@@ -270,8 +279,8 @@ with open('$KIMI_MCP_JSON') as f:
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 config['mcpServers']['kimi-swarm'] = {
-    'command': '$PYTHON',
-    'args': ['-m', 'kimi_swarm.mcp_server'],
+    'command': '$MCP_CMD',
+    'args': $MCP_ARGS,
     'autoStart': True
 }
 with open('$KIMI_MCP_JSON', 'w') as f:
@@ -286,8 +295,8 @@ print('Updated kimi-swarm in mcpServers')
         "$PYTHON" -c "
 import json
 config = {'mcpServers': {'kimi-swarm': {
-    'command': '$PYTHON',
-    'args': ['-m', 'kimi_swarm.mcp_server'],
+    'command': '$MCP_CMD',
+    'args': $MCP_ARGS,
     'autoStart': True
 }}}
 with open('$KIMI_MCP_JSON', 'w') as f:
@@ -302,7 +311,20 @@ print('Created mcp.json with kimi-swarm server')
         if [[ "$MCP_REGISTERED" != "true" ]]; then
         log_warn "Could not automatically register MCP server."
         log_info "Add this manually to $KIMI_MCP_JSON:"
-        cat <<EOF
+        if [[ "$ARCH_FIX_NEEDED" == "true" ]]; then
+            cat <<EOF
+{
+  "mcpServers": {
+    "kimi-swarm": {
+      "command": "arch",
+      "args": ["-arm64", "$PYTHON", "-m", "kimi_swarm.mcp_server"],
+      "autoStart": true
+    }
+  }
+}
+EOF
+        else
+            cat <<EOF
 {
   "mcpServers": {
     "kimi-swarm": {
@@ -313,6 +335,7 @@ print('Created mcp.json with kimi-swarm server')
   }
 }
 EOF
+        fi
     fi
 
     # --------------------------------------------------------------------------

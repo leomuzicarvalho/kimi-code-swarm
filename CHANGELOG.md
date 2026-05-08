@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Apple Silicon architecture mismatch in MCP config** — On Apple Silicon Macs with universal Python binaries, the MCP server could fail intermittently with `mach-o file, but is an incompatible architecture`. This occurred when native extension packages (e.g., `pydantic-core`, `rpds-py`) were compiled for x86_64 (e.g., via Rosetta) but the MCP server spawned as arm64. `install.sh` now detects this situation and writes the MCP config with an `arch -arm64` wrapper (`"command": "arch", "args": ["-arm64", "python3", ...]`), ensuring deterministic arm64 execution regardless of parent process architecture. Updated README with manual configuration instructions for this scenario.
+
 ### Added
 
 - **MCP Server Setup documentation in README** — Added a dedicated section explaining how to manually configure `~/.kimi/mcp.json`, with a clear warning to use the **absolute path** to the Python interpreter. This prevents the common pitfall where `"command": "python3"` resolves to a project virtual environment's Python (which lacks `kimi-swarm`), causing the MCP connection to fail when running `kimi` outside the install folder.
