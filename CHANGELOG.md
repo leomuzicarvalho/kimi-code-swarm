@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Agentic Loop with Verification** — The swarm now supports a full execute-verify-retry cycle:
+  - `SwarmOrchestrator.execute_with_verification(agent_id, prompt, verifier_agent_id, max_iterations=3)` runs a task and optionally verifies the result. If verification fails and iterations remain, it stores feedback, increments `attempt_count`, and returns a structured payload with `route_to_entry_point` and `needs_retry: true`.
+  - `SwarmOrchestrator.acknowledge_failure(agent_id)` digests iteration history (attempt count, verification status, feedback) on the entry-point agent and stores it in `agent.metadata["failure_acknowledged"]`.
+  - `SwarmOrchestrator.reassign_with_feedback(from_agent_id, to_agent_id, corrected_prompt)` routes a corrected task to a new agent, carrying forward the full iteration history and verification feedback.
+  - New MCP tools: `agent_execute_with_verification`, `agent_acknowledge_failure`, `agent_reassign_with_feedback`.
+  - `VerificationResult` dataclass tracks `passed`, `feedback`, `web_ui_ok`, `web_ui_details`, and `iteration_number`.
+  - `TaskInfo` extended with `attempt_count`, `max_attempts`, `verification_status`, `verification_feedback`, and `last_iteration_at`.
+  - `SwarmStatus` extended with `total_iterations` and `last_verification`.
+  - Dashboard HTML shows an **iteration badge** (global loop counter), a **verification pill** per agent (passed/failed/pending), and **attempt count** (e.g., `Attempt: 2/3`).
+  - `mcp_client.py` supports configurable simulation failure rates via `KIMI_SWARM_SIM_FAILURE_RATE` and `KIMI_SWARM_SIM_VERIFY_FAILURE_RATE` environment variables for testing the loop.
+  - After **every loop iteration**, the dashboard receives an immediate SSE broadcast via `_broadcast_now()` and the state file is saved.
+
+- **Dashboard Verification Endpoint** — `/api/verify` returns:
+  - `is_state_fresh` — state file modified within last 5 seconds
+  - `last_update_timestamp` — ISO timestamp of last state file write
+  - `agent_count`, `iteration_count`, `swarm_id`, `is_active`
+  - New MCP tool `swarm_verify_dashboard` queries this endpoint and reports dashboard health.
+
+- **Browser Tab Deduplication** — Ensures only **one browser tab** is ever opened for swarm info:
+  - `_browser_lock_path()` → `~/.kimi/kimi-swarm-browser.lock` tracks the last browser open time.
+  - `_should_open_browser(cooldown=30)` returns `False` if a tab was opened within the last 30 seconds.
+  - `_mark_browser_opened()` writes the current timestamp to the lock file.
+  - `stop_all_dashboards()` clears the lock so a fresh init can open a new tab.
+  - Both `start_dashboard()` and `launch_persistent_dashboard()` respect the cooldown before calling `webbrowser.open()`.
+
+### Changed
+
+- **`start_dashboard()` unified with persistent dashboard discovery** — Before starting a new in-process server, it now checks `find_running_dashboard()` first. If a persistent background dashboard is already running, it returns that port instead of spawning a duplicate. This prevents competing servers.
+- **`swarm_ui` MCP tool now uses `launch_persistent_dashboard()`** instead of `start_dashboard()`. The dashboard survives MCP server restarts and goes through the same deduplication path as `swarm_init`.
+- **`swarm_init()` stops all existing dashboards before launching** — Calls `stop_all_dashboards()` during reinit to kill stale persistent processes, stop in-process servers, and clear the browser lock. Guarantees a clean slate.
+- **`swarm_ui_stop()` and CLI `cmd_shutdown()` use `stop_all_dashboards()`** for consistent cleanup of both server types.
+
+### Fixed
+
+- **`_check_state_freshness()` missing `datetime` import** — Added `from datetime import datetime` at the top of `web_dashboard.py` so the `/api/verify` endpoint can format timestamps correctly.
+- **Verifier prompt detection in `mcp_client.py`** — Verification prompts now return `"PASSED: ..."` on success and `"FAILED: ..."` on failure so the agentic loop can parse them correctly.
+- **`reassign_with_feedback()` now includes `verification_feedback`** in the new agent's `task.result` alongside the iteration history.
+
+## [0.1.0] - 2025-05-XX
+
 ### Fixed
 
 - **Swarm cycle dies on first agent failure** — When an `agent_execute` call failed (or threw an exception), Kimi would abandon the swarm and take over the task directly. The MCP tool now catches all exceptions and returns a structured failure response. Crucially, the response markdown includes explicit guidance: **"Do NOT take over this task yourself. Route this failure to the entry-point agent ... for coordination and reassignment."** This keeps the swarm cycle alive by giving Kimi a concrete next step inside the tool layer rather than falling back to direct execution.

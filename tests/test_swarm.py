@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from kimi_swarm.models import AgentConfig, AgentPhase, SwarmTopology, ContextWindow
+from kimi_swarm.models import AgentConfig, AgentPhase, SwarmTopology, ContextWindow, VerificationResult
 from kimi_swarm.orchestrator import SwarmOrchestrator
 from kimi_swarm.display import KimiDisplay
 from kimi_swarm import model_mapping
@@ -20,6 +20,19 @@ class TestModels:
         ctx.update(16000)
         assert ctx.used_tokens == 16000
         assert ctx.usage_percent == 50.0
+
+    def test_verification_result_defaults(self):
+        v = VerificationResult()
+        assert v.passed is False
+        assert v.feedback == ""
+        assert v.iteration_number == 0
+
+    def test_verification_result_to_dict(self):
+        v = VerificationResult(passed=True, feedback="ok", iteration_number=2)
+        d = v.to_dict()
+        assert d["passed"] is True
+        assert d["feedback"] == "ok"
+        assert d["iteration_number"] == 2
 
 
 class TestOrchestrator:
@@ -158,6 +171,80 @@ class TestOrchestrator:
             assert orch2.load_state()
             assert orch2.entry_point_agent_id == a1.agent_id
             assert orch2.get_entry_point_agent().name == "arch-1"
+
+
+class TestAgenticLoop:
+    def test_execute_with_verification_no_verifier(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        agent = orch.spawn_agent(AgentConfig(type="coder", name="loop-dev"))
+        result = orch.execute_with_verification(agent.agent_id, "do something")
+        assert result["status"] == "completed"
+        assert result["iteration"] == 1
+
+    def test_execute_with_verification_tracks_iterations(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        dev = orch.spawn_agent(AgentConfig(type="coder", name="dev"))
+        verifier = orch.spawn_agent(AgentConfig(type="tester", name="verifier"))
+        result = orch.execute_with_verification(
+            dev.agent_id,
+            "build feature",
+            verifier_agent_id=verifier.agent_id,
+            max_iterations=3,
+        )
+        # With default 0% failure rate, should pass on first iteration
+        assert result["status"] == "completed"
+        assert result["iteration"] == 1
+        assert result["verification"]["passed"] is True
+
+    def test_acknowledge_failure(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        agent = orch.spawn_agent(AgentConfig(type="coder", name="failer"))
+        orch.assign_task(agent.agent_id, "task")
+        agent.task.attempt_count = 2
+        agent.task.max_attempts = 3
+        agent.task.verification_status = "failed"
+        agent.task.verification_feedback = "bad output"
+
+        result = orch.acknowledge_failure(agent.agent_id)
+        assert result["status"] == "acknowledged"
+        assert result["history"]["attempt_count"] == 2
+        assert result["history"]["verification_status"] == "failed"
+        assert agent.phase == AgentPhase.PLANNING
+        assert "failure_acknowledged" in agent.metadata
+
+    def test_reassign_with_feedback(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        from_agent = orch.spawn_agent(AgentConfig(type="coder", name="from"))
+        to_agent = orch.spawn_agent(AgentConfig(type="coder", name="to"))
+        orch.assign_task(from_agent.agent_id, "original task")
+        from_agent.task.attempt_count = 1
+        from_agent.task.verification_feedback = "fix this"
+        from_agent.metadata["failure_acknowledged"] = {"attempt_count": 1}
+
+        result = orch.reassign_with_feedback(
+            from_agent.agent_id, to_agent.agent_id, "corrected task"
+        )
+        assert result["status"] == "reassigned"
+        assert to_agent.task.description == "corrected task"
+        assert to_agent.task.attempt_count == 1
+        assert "fix this" in to_agent.task.result
+
+    def test_web_ui_state_check(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        assert orch._verify_web_ui_state() is True  # state file was just saved
+
+    def test_total_iterations_tracked(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        agent = orch.spawn_agent(AgentConfig(type="coder", name="iter"))
+        assert orch.total_iterations == 0
+        orch.execute_with_verification(agent.agent_id, "task")
+        assert orch.total_iterations == 1
 
 
 class TestDisplay:
@@ -342,3 +429,102 @@ class TestDashboardIntegration:
                 assert result["status"] == "failed"
                 assert "Do NOT take over this task yourself" in result["markdown"]
                 assert "entry-point agent" in result["markdown"]
+
+
+class TestBrowserDeduplication:
+    def test_should_open_browser_when_no_lock(self):
+        from kimi_swarm.web_dashboard import _should_open_browser, _browser_lock_path
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = os.path.join(tmpdir, "browser.lock")
+            assert _should_open_browser(lock) is True
+
+    def test_should_not_open_browser_within_cooldown(self):
+        from kimi_swarm.web_dashboard import _should_open_browser, _mark_browser_opened
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = os.path.join(tmpdir, "browser.lock")
+            _mark_browser_opened(lock)
+            assert _should_open_browser(lock, cooldown=30) is False
+
+    def test_should_open_browser_after_cooldown(self):
+        from kimi_swarm.web_dashboard import _should_open_browser, _mark_browser_opened
+        import tempfile, os, time
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = os.path.join(tmpdir, "browser.lock")
+            _mark_browser_opened(lock)
+            assert _should_open_browser(lock, cooldown=0) is True
+
+    def test_stop_all_dashboards_clears_browser_lock(self):
+        from kimi_swarm.web_dashboard import _mark_browser_opened, _should_open_browser, stop_all_dashboards
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = os.path.join(tmpdir, "browser.lock")
+            _mark_browser_opened(lock)
+            assert _should_open_browser(lock) is False
+            stop_all_dashboards(lock)
+            assert _should_open_browser(lock) is True
+
+
+class TestAgenticLoopMCP:
+    def test_agent_execute_with_verification_mcp(self):
+        """Verify agent_execute_with_verification MCP tool works end-to-end."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            mcp_server.agent_spawn(agent_type="coder", name="dev", model="sonnet")
+            mcp_server.agent_spawn(agent_type="tester", name="vfy", model="haiku")
+
+            result = mcp_server.agent_execute_with_verification(
+                agent_id="dev",
+                prompt="build auth",
+                verifier_agent_id="vfy",
+                max_iterations=2,
+            )
+            assert result["status"] == "completed"
+            assert result["iteration"] == 1
+            assert result["needs_retry"] is False
+            assert "Agentic Loop Complete" in result["markdown"]
+
+    def test_agent_acknowledge_failure_mcp(self):
+        """Verify agent_acknowledge_failure MCP tool works."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            mcp_server.agent_spawn(agent_type="architect", name="coord", model="sonnet")
+
+            result = mcp_server.agent_acknowledge_failure(agent_id="coord")
+            assert result["status"] == "acknowledged"
+            assert "Failure Acknowledged" in result["markdown"]
+
+    def test_agent_reassign_with_feedback_mcp(self):
+        """Verify agent_reassign_with_feedback MCP tool works."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            mcp_server.agent_spawn(agent_type="coder", name="from", model="sonnet")
+            mcp_server.agent_spawn(agent_type="coder", name="to", model="haiku")
+            mcp_server.agent_assign(agent_id="from", task_description="old task")
+
+            result = mcp_server.agent_reassign_with_feedback(
+                from_agent_id="from",
+                to_agent_id="to",
+                corrected_prompt="fixed task",
+            )
+            assert result["status"] == "reassigned"
+            assert "Task Reassigned" in result["markdown"]

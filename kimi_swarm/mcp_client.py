@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from typing import Any
 
 from .models import AgentConfig, AgentStatus, AgentPhase, TaskInfo, TokenUsage, ContextWindow
 
 
 class SwarmMCPClient:
-    """Local MCP client — simulates agent execution for workflow building and testing."""
+    """Local MCP client — simulates agent execution with configurable realism."""
 
     def __init__(self) -> None:
         self._agents: dict[str, dict[str, Any]] = {}
         self._call_count = 0
+        self._failure_rate = float(os.environ.get("KIMI_SWARM_SIM_FAILURE_RATE", "0.0"))
+        self._verify_failure_rate = float(os.environ.get("KIMI_SWARM_SIM_VERIFY_FAILURE_RATE", "0.0"))
 
     def swarm_init(self, topology: str, max_agents: int) -> dict[str, Any]:
         return {
@@ -41,12 +44,45 @@ class SwarmMCPClient:
         # Simulate token usage based on prompt length
         prompt_tokens = len(prompt.split())
         completion_tokens = prompt_tokens // 2
+
+        # Determine if this should simulate a failure
+        # Verifier prompts get different failure rate
+        is_verification = "verify" in prompt.lower() or "verification" in prompt.lower()
+        fail_rate = self._verify_failure_rate if is_verification else self._failure_rate
+        should_fail = random.random() < fail_rate
+
+        if should_fail:
+            result_text = (
+                f"FAILED: Simulated failure for task '{prompt[:50]}...'. "
+                f"The output did not meet requirements. Please review and retry."
+            )
+            if is_verification:
+                result_text = (
+                    f"FAILED: Verification did not pass. Issues found with '{prompt[:50]}...'. "
+                    f"Please review and retry."
+                )
+            return {
+                "agent_id": agent_id,
+                "status": "failed",
+                "mode": "native_kimi",
+                "prompt": prompt,
+                "result": result_text,
+                "tokens": {
+                    "prompt": prompt_tokens,
+                    "completion": completion_tokens,
+                    "total": prompt_tokens + completion_tokens,
+                },
+            }
+
+        result_text = f"Completed: {prompt[:100]}..."
+        if is_verification:
+            result_text = f"PASSED: Verification completed successfully for '{prompt[:50]}...'. All checks passed."
         return {
             "agent_id": agent_id,
             "status": "completed",
             "mode": "native_kimi",
             "prompt": prompt,
-            "result": f"Completed: {prompt[:50]}...",
+            "result": result_text,
             "tokens": {
                 "prompt": prompt_tokens,
                 "completion": completion_tokens,

@@ -18,6 +18,7 @@ from .models import (
     SwarmTopology,
     TaskInfo,
     TokenUsage,
+    VerificationResult,
 )
 from .mcp_client import SwarmMCPClient
 from . import model_mapping
@@ -27,7 +28,7 @@ DEFAULT_STATE_PATH = Path.home() / ".kimi" / "kimi-swarm-state.json"
 
 
 class SwarmOrchestrator:
-    """Orchestrates a swarm of agents with lifecycle management."""
+    """Orchestrates a swarm of agents with lifecycle management and agentic loop."""
 
     def __init__(
         self,
@@ -44,6 +45,9 @@ class SwarmOrchestrator:
         self._main_context = ContextWindow(used_tokens=0, max_tokens=128000)
         self._state_path = Path(state_path) if state_path else DEFAULT_STATE_PATH
         self.entry_point_agent_id: str = ""
+        self.total_iterations: int = 0
+        self._last_verification: VerificationResult | None = None
+        self._dashboard_broadcast: Any | None = None  # injected from mcp_server
 
     def init_swarm(self) -> SwarmStatus:
         """Initialize the swarm via MCP."""
@@ -82,16 +86,22 @@ class SwarmOrchestrator:
         if not self.entry_point_agent_id:
             self.entry_point_agent_id = agent_id
         self.save_state()
+        self._broadcast_now()
         return agent
 
-    def assign_task(self, agent_id: str, task_description: str) -> TaskInfo:
+    def assign_task(self, agent_id: str, task_description: str, max_attempts: int = 3) -> TaskInfo:
         """Assign a task to an agent."""
         agent = self._get_agent(agent_id)
-        task = TaskInfo(description=task_description, status="pending")
+        task = TaskInfo(
+            description=task_description,
+            status="pending",
+            max_attempts=max_attempts,
+        )
         agent.task = task
         agent.phase = AgentPhase.PLANNING
         agent.last_active = datetime.now()
         self.save_state()
+        self._broadcast_now()
         return task
 
     def execute_task(self, agent_id: str, prompt: str) -> dict[str, Any]:
@@ -103,6 +113,8 @@ class SwarmOrchestrator:
         agent.phase = AgentPhase.EXECUTING
         agent.task.status = "in_progress"
         agent.last_active = datetime.now()
+        self.save_state()
+        self._broadcast_now()
 
         result = self._client.agent_execute(agent_id, prompt)
 
@@ -124,7 +136,281 @@ class SwarmOrchestrator:
 
         agent.phase = AgentPhase.COMPLETED if result.get("status") == "completed" else AgentPhase.FAILED
         self.save_state()
+        self._broadcast_now()
         return result
+
+    def execute_with_verification(
+        self,
+        agent_id: str,
+        prompt: str,
+        verifier_agent_id: str | None = None,
+        max_iterations: int = 3,
+        verification_prompt: str = "",
+    ) -> dict[str, Any]:
+        """Execute a task with verification loop.
+
+        Flow:
+        1. Execute task on agent
+        2. If verifier_agent_id provided, run verification
+        3. If verification passes → return success
+        4. If verification fails AND attempts < max_iterations:
+           - Update agent phase to FAILED
+           - Store feedback in task
+           - Increment attempt_count
+           - Save state and broadcast
+           - Return structured result with iteration info for entry-point routing
+        5. If max iterations exceeded → return final failure
+        """
+        agent = self._get_agent(agent_id)
+        if agent.task is None:
+            self.assign_task(agent_id, prompt, max_attempts=max_iterations)
+
+        task = agent.task
+        assert task is not None
+
+        for iteration in range(1, max_iterations + 1):
+            self.total_iterations += 1
+            task.attempt_count = iteration
+            task.last_iteration_at = datetime.now()
+            task.verification_status = "pending"
+            task.status = "in_progress"
+            task.progress_percent = ((iteration - 1) / max_iterations) * 100
+            agent.phase = AgentPhase.EXECUTING
+            self.save_state()
+            self._broadcast_now()
+
+            # Step 1: Execute
+            exec_result = self._client.agent_execute(agent_id, prompt)
+            tokens = exec_result.get("tokens", {})
+            agent.tokens.add(
+                prompt=tokens.get("prompt", 0),
+                completion=tokens.get("completion", 0),
+            )
+            agent.context.update(agent.tokens.total_tokens)
+            agent.messages_count += 1
+
+            task.result = exec_result.get("result", "")
+            task.progress_percent = ((iteration - 0.5) / max_iterations) * 100
+            self.save_state()
+            self._broadcast_now()
+
+            # Step 2: Verify (if verifier provided)
+            if verifier_agent_id and verifier_agent_id in self._agents:
+                verifier = self._agents[verifier_agent_id]
+                verifier.phase = AgentPhase.REVIEWING
+                verifier.last_active = datetime.now()
+                self.save_state()
+                self._broadcast_now()
+
+                verify_prompt = verification_prompt or (
+                    f"Verify the following task result. Task: {task.description}\n"
+                    f"Result: {task.result}\n"
+                    f"Iteration: {iteration}/{max_iterations}\n"
+                    f"Check: 1) correctness, 2) completeness, 3) web UI state freshness. "
+                    f"Respond with PASSED or FAILED and detailed feedback."
+                )
+                verify_result = self._client.agent_execute(verifier_agent_id, verify_prompt)
+
+                verifier.tokens.add(
+                    prompt=verify_result.get("tokens", {}).get("prompt", 0),
+                    completion=verify_result.get("tokens", {}).get("completion", 0),
+                )
+                verifier.context.update(verifier.tokens.total_tokens)
+                verifier.messages_count += 1
+
+                # Parse verification result
+                v_text = str(verify_result.get("result", "")).upper()
+                passed = "PASSED" in v_text and "FAILED" not in v_text
+                feedback = verify_result.get("result", "")
+
+                # Check web UI freshness
+                web_ui_ok = self._verify_web_ui_state()
+
+                verification = VerificationResult(
+                    passed=passed,
+                    feedback=feedback,
+                    web_ui_ok=web_ui_ok,
+                    web_ui_details="State file fresh" if web_ui_ok else "State file stale",
+                    iteration_number=iteration,
+                )
+                self._last_verification = verification
+                task.verification_status = "passed" if passed else "failed"
+                task.verification_feedback = feedback
+
+                verifier.phase = AgentPhase.COMPLETED if passed else AgentPhase.WAITING
+                self.save_state()
+                self._broadcast_now()
+
+                if passed:
+                    task.status = "completed"
+                    task.progress_percent = 100.0
+                    task.completed_at = datetime.now()
+                    agent.phase = AgentPhase.COMPLETED
+                    self.save_state()
+                    self._broadcast_now()
+                    return {
+                        "status": "completed",
+                        "agent_id": agent_id,
+                        "iteration": iteration,
+                        "verification": verification.to_dict(),
+                        "result": task.result,
+                        "tokens": agent.tokens.to_dict(),
+                    }
+
+                # Verification failed - prepare for next iteration or final failure
+                if iteration < max_iterations:
+                    agent.phase = AgentPhase.FAILED
+                    task.status = "failed"
+                    # Build feedback payload for entry-point agent
+                    feedback_payload = (
+                        f"\n\n🔁 **AGENTIC LOOP — Iteration {iteration}/{max_iterations} FAILED**\n\n"
+                        f"**Agent:** `{agent.name}` (`{agent_id}`)\n"
+                        f"**Task:** {task.description}\n\n"
+                        f"**Verification Feedback:**\n{feedback}\n\n"
+                        f"**Web UI Status:** {'✅ Fresh' if web_ui_ok else '❌ Stale'}\n\n"
+                        f"**Action Required:** Route corrected task to entry-point agent "
+                        f"`{self.get_entry_point_agent().name if self.get_entry_point_agent() else 'N/A'}` "
+                        f"for reassignment with this feedback digested."
+                    )
+                    task.result = task.result + feedback_payload
+                    self.save_state()
+                    self._broadcast_now()
+                    # Return early with iteration info - caller routes to entry-point
+                    return {
+                        "status": "failed",
+                        "agent_id": agent_id,
+                        "iteration": iteration,
+                        "max_iterations": max_iterations,
+                        "verification": verification.to_dict(),
+                        "result": task.result,
+                        "feedback_payload": feedback_payload,
+                        "tokens": agent.tokens.to_dict(),
+                        "route_to_entry_point": self.entry_point_agent_id,
+                        "needs_retry": True,
+                    }
+
+            else:
+                # No verifier - just check execution status
+                if exec_result.get("status") == "completed":
+                    task.status = "completed"
+                    task.progress_percent = 100.0
+                    task.completed_at = datetime.now()
+                    task.verification_status = "passed"
+                    agent.phase = AgentPhase.COMPLETED
+                    self.save_state()
+                    self._broadcast_now()
+                    return {
+                        "status": "completed",
+                        "agent_id": agent_id,
+                        "iteration": iteration,
+                        "result": task.result,
+                        "tokens": agent.tokens.to_dict(),
+                    }
+
+        # Max iterations exceeded
+        task.status = "failed"
+        task.progress_percent = 100.0
+        agent.phase = AgentPhase.FAILED
+        final_feedback = (
+            f"\n\n❌ **AGENTIC LOOP — MAX ITERATIONS ({max_iterations}) EXCEEDED**\n\n"
+            f"**Agent:** `{agent.name}` (`{agent_id}`)\n"
+            f"**Task:** {task.description}\n\n"
+            f"**Final Verification Feedback:** {task.verification_feedback}\n\n"
+            f"**Action Required:** Route to entry-point agent for manual review or reassignment."
+        )
+        task.result = task.result + final_feedback
+        self.save_state()
+        self._broadcast_now()
+        return {
+            "status": "failed",
+            "agent_id": agent_id,
+            "iteration": max_iterations,
+            "max_iterations": max_iterations,
+            "verification": self._last_verification.to_dict() if self._last_verification else None,
+            "result": task.result,
+            "route_to_entry_point": self.entry_point_agent_id,
+            "needs_retry": False,
+        }
+
+    def acknowledge_failure(self, agent_id: str) -> dict[str, Any]:
+        """Main agent acknowledges a failure, digests loop info, and prepares for reassignment.
+
+        This should be called on the entry-point agent after receiving a failed loop result.
+        Returns a structured payload with all iteration history for the next assignment.
+        """
+        agent = self._get_agent(agent_id)
+        if agent.task is None:
+            return {"status": "error", "message": "No task found for agent"}
+
+        task = agent.task
+        history = {
+            "agent_id": agent_id,
+            "agent_name": agent.name,
+            "task_description": task.description,
+            "attempt_count": task.attempt_count,
+            "max_attempts": task.max_attempts,
+            "verification_status": task.verification_status,
+            "verification_feedback": task.verification_feedback,
+            "last_result": task.result,
+            "total_swarm_iterations": self.total_iterations,
+            "acknowledged_at": datetime.now().isoformat(),
+        }
+
+        agent.phase = AgentPhase.PLANNING
+        agent.last_active = datetime.now()
+        agent.metadata["failure_acknowledged"] = history
+        self.save_state()
+        self._broadcast_now()
+
+        return {
+            "status": "acknowledged",
+            "message": (
+                f"Failure acknowledged for {agent.name}. "
+                f"Attempt {task.attempt_count}/{task.max_attempts} digested. "
+                f"Ready to reassign to entry-point or another agent with feedback."
+            ),
+            "history": history,
+            "entry_point_agent_id": self.entry_point_agent_id,
+        }
+
+    def reassign_with_feedback(self, from_agent_id: str, to_agent_id: str, corrected_prompt: str) -> dict[str, Any]:
+        """Reassign a corrected task from one agent to another, carrying forward feedback history."""
+        from_agent = self._get_agent(from_agent_id)
+        to_agent = self._get_agent(to_agent_id)
+
+        if from_agent.task is None:
+            return {"status": "error", "message": "No task to reassign"}
+
+        old_task = from_agent.task
+        new_task = TaskInfo(
+            description=corrected_prompt,
+            status="pending",
+            max_attempts=old_task.max_attempts,
+            attempt_count=old_task.attempt_count,
+            verification_status="pending",
+            verification_feedback=old_task.verification_feedback,
+        )
+        # Carry forward metadata and feedback
+        if "failure_acknowledged" in from_agent.metadata:
+            new_task.result = (
+                f"[PREVIOUS ITERATION HISTORY]\n"
+                f"{json.dumps(from_agent.metadata['failure_acknowledged'], indent=2)}\n\n"
+                f"[VERIFICATION FEEDBACK]\n{old_task.verification_feedback}\n\n"
+                f"[CORRECTED TASK]\n{corrected_prompt}"
+            )
+
+        to_agent.task = new_task
+        to_agent.phase = AgentPhase.PLANNING
+        to_agent.last_active = datetime.now()
+        self.save_state()
+        self._broadcast_now()
+
+        return {
+            "status": "reassigned",
+            "from_agent": from_agent.name,
+            "to_agent": to_agent.name,
+            "task": new_task.to_dict(),
+        }
 
     def update_agent_progress(self, agent_id: str, progress: float) -> None:
         """Manually update an agent's task progress."""
@@ -132,6 +418,7 @@ class SwarmOrchestrator:
         if agent.task:
             agent.task.progress_percent = max(0.0, min(100.0, progress))
         self.save_state()
+        self._broadcast_now()
 
     def set_agent_phase(self, agent_id: str, phase: AgentPhase | str) -> None:
         """Set an agent's phase manually."""
@@ -139,6 +426,7 @@ class SwarmOrchestrator:
         agent.phase = AgentPhase(phase) if isinstance(phase, str) else phase
         agent.last_active = datetime.now()
         self.save_state()
+        self._broadcast_now()
 
     def get_agent(self, agent_id: str) -> AgentStatus:
         """Get a single agent's status."""
@@ -154,6 +442,7 @@ class SwarmOrchestrator:
         self._client.agent_terminate(agent_id)
         agent.phase = AgentPhase.TERMINATED
         self.save_state()
+        self._broadcast_now()
 
     def shutdown(self) -> SwarmStatus:
         """Shutdown the entire swarm."""
@@ -164,6 +453,7 @@ class SwarmOrchestrator:
             if agent.phase not in (AgentPhase.TERMINATED, AgentPhase.FAILED):
                 agent.phase = AgentPhase.TERMINATED
         self.save_state()
+        self._broadcast_now()
         return self.get_status()
 
     def get_status(self) -> SwarmStatus:
@@ -180,6 +470,8 @@ class SwarmOrchestrator:
             main_context=self._main_context,
             is_active=self._is_active,
             entry_point_agent_id=self.entry_point_agent_id,
+            total_iterations=self.total_iterations,
+            last_verification=self._last_verification,
         )
 
     def update_main_context(self, used_tokens: int) -> None:
@@ -209,6 +501,8 @@ class SwarmOrchestrator:
             self._main_context = status.main_context
             self._is_active = status.is_active
             self.entry_point_agent_id = status.entry_point_agent_id
+            self.total_iterations = status.total_iterations
+            self._last_verification = status.last_verification
             return True
         except Exception:
             return False
@@ -223,6 +517,28 @@ class SwarmOrchestrator:
         if self.entry_point_agent_id and self.entry_point_agent_id in self._agents:
             return self._agents[self.entry_point_agent_id]
         return None
+
+    def set_dashboard_broadcast(self, broadcast_fn: Any) -> None:
+        """Inject a dashboard broadcast function for immediate updates."""
+        self._dashboard_broadcast = broadcast_fn
+
+    def _broadcast_now(self) -> None:
+        """Trigger immediate dashboard broadcast if available."""
+        if self._dashboard_broadcast is not None:
+            try:
+                self._dashboard_broadcast()
+            except Exception:
+                pass
+
+    def _verify_web_ui_state(self) -> bool:
+        """Check if the state file has been updated recently (within 5 seconds)."""
+        try:
+            if self._state_path.exists():
+                mtime = self._state_path.stat().st_mtime
+                return (datetime.now().timestamp() - mtime) < 5.0
+        except Exception:
+            pass
+        return False
 
     def _get_agent(self, agent_id: str) -> AgentStatus:
         if agent_id not in self._agents:

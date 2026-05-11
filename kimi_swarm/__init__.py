@@ -1,6 +1,6 @@
 """Kimi Swarm - Multi-agent orchestration framework for Kimi Code."""
 
-from .models import AgentConfig, AgentStatus, SwarmStatus, TaskInfo, SwarmTopology
+from .models import AgentConfig, AgentStatus, SwarmStatus, TaskInfo, SwarmTopology, VerificationResult
 from .orchestrator import SwarmOrchestrator
 from .display import KimiDisplay
 from . import model_mapping
@@ -12,6 +12,7 @@ __all__ = [
     "SwarmStatus",
     "TaskInfo",
     "SwarmTopology",
+    "VerificationResult",
     "SwarmOrchestrator",
     "KimiDisplay",
     "model_mapping",

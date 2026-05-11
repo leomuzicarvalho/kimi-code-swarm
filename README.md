@@ -3,7 +3,7 @@
 A swarm orchestration CLI and framework for **Kimi Code** that enables multi-agent collaboration with real-time status visibility directly in Kimi's chat window.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-21%20passing-green.svg)]()
+[![Tests](https://img.shields.io/badge/tests-35%20passing-green.svg)]()
 
 ---
 
@@ -369,6 +369,58 @@ Each agent maps to a todo item with its phase and a visual progress bar (`██
 
 ---
 
+## Agentic Loop with Verification (MCP Only)
+
+When using the MCP server inside Kimi Code, you can run tasks through a **verification loop** that automatically retries on failure:
+
+```
+┌─────────────┐    execute+verify    ┌──────────┐
+│  dev-loop   │ ───────────────────► │ verifier │
+└─────────────┘                      └────┬─────┘
+       ▲                                  │
+       │              FAILED              │
+       └──────────────────────────────────┘
+       │                                  │
+       ▼                                  ▼
+┌─────────────┐    acknowledge_failure   │
+│ coordinator │ ◄────────────────────────┘
+│(entry-point)│
+└──────┬──────┘
+       │ reassign_with_feedback
+       ▼
+┌─────────────┐
+│  dev-loop   │ (next iteration with feedback)
+│  (retry)    │
+└─────────────┘
+```
+
+**MCP Tools:**
+
+| Tool | Purpose |
+|------|---------|
+| `agent_execute_with_verification` | Execute a task with verifier check. If it fails, returns `needs_retry: true` and `route_to_entry_point`. After every iteration the dashboard is updated. |
+| `agent_acknowledge_failure` | Entry-point agent digests the failure history (attempt count, feedback) and prepares for reassignment. |
+| `agent_reassign_with_feedback` | Route the corrected task to another agent, carrying forward all iteration history and verification feedback. |
+| `swarm_verify_dashboard` | Check that the dashboard is responding, state is fresh (< 5s), and agent counts match. |
+
+The loop respects `max_iterations` (default 3). On the final failure, `needs_retry` becomes `false` and manual review is required.
+
+## Browser Tab Deduplication
+
+The swarm guarantees **only one browser tab** is ever opened:
+
+- A 30-second cooldown lock file (`~/.kimi/kimi-swarm-browser.lock`) prevents duplicate tabs
+- `swarm_init` stops any existing dashboard before starting fresh
+- `swarm_ui` reuses an existing persistent dashboard instead of spawning duplicates
+- `kimi-swarm shutdown` clears the lock so the next init can open a new tab
+
+| Scenario | Result |
+|----------|--------|
+| `swarm_init` → `swarm_init` again | 1 tab, fresh dashboard |
+| `swarm_init` → `swarm_ui` | 1 tab (reuses persistent dashboard) |
+| Multiple `swarm_ui` calls | 1 tab (30s cooldown) |
+| `shutdown` → `init` | Clean stop + fresh start with new tab |
+
 ## All CLI Commands
 
 | Command | Description |
@@ -392,6 +444,9 @@ Each agent maps to a todo item with its phase and a visual progress bar (`██
 ```bash
 # Run tests
 pytest tests/test_swarm.py -v
+
+# Run only non-MCP tests
+pytest tests/test_swarm.py -v -k "not MCP"
 
 # Run the demo
 python demo.py

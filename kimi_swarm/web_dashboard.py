@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -137,6 +138,44 @@ header p {
 .stat-value.accent { color: var(--accent); }
 .stat-value.success { color: var(--success); }
 .stat-value.warning { color: var(--warning); }
+
+/* Iteration badge */
+.iteration-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  animation: pulseGlow 2s infinite;
+}
+.iteration-badge.static {
+  animation: none;
+  background: rgba(255,255,255,0.06);
+  color: var(--muted);
+}
+
+/* Verification status */
+.verification-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.verification-pill.passed { background: rgba(34,197,94,0.12); color: var(--success); border-color: rgba(34,197,94,0.2); }
+.verification-pill.failed { background: rgba(239,68,68,0.12); color: var(--danger); border-color: rgba(239,68,68,0.2); }
+.verification-pill.pending { background: rgba(245,158,11,0.12); color: var(--warning); border-color: rgba(245,158,11,0.2); }
 
 /* Progress ring */
 .ring-wrap {
@@ -392,6 +431,24 @@ header p {
   animation: blink 1s infinite;
 }
 
+/* State freshness indicator */
+.freshness-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(34,197,94,0.1);
+  color: var(--success);
+  transition: all 0.3s ease;
+}
+.freshness-indicator.stale {
+  background: rgba(239,68,68,0.1);
+  color: var(--danger);
+}
+
 @keyframes fadeInDown {
   from { opacity: 0; transform: translateY(-20px); }
   to { opacity: 1; transform: translateY(0); }
@@ -475,6 +532,10 @@ header p {
           <div style="font-size:0.8rem;color:var(--muted);">Total Tasks</div>
         </div>
       </div>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span id="iterationBadge" class="iteration-badge static">Iter: 0</span>
+        <span id="freshnessIndicator" class="freshness-indicator">State Fresh</span>
+      </div>
     </div>
 
     <div class="card">
@@ -524,6 +585,7 @@ const PHASE_PULSE = ['executing', 'planning', 'reviewing', 'spawning'];
 let evtSource = null;
 let reconnectTimer = null;
 let animationDelay = 0;
+let lastUpdateTime = 0;
 
 function setConnected(yes) {
   const el = document.getElementById('connStatus');
@@ -592,6 +654,28 @@ function updateTop(data) {
 
   updateRing(data.overall_progress);
 
+  // Iteration badge
+  const iterBadge = document.getElementById('iterationBadge');
+  const totalIter = data.total_iterations || 0;
+  iterBadge.textContent = `Iter: ${totalIter}`;
+  if (totalIter > 0) {
+    iterBadge.classList.remove('static');
+  } else {
+    iterBadge.classList.add('static');
+  }
+
+  // Freshness indicator
+  const freshness = document.getElementById('freshnessIndicator');
+  const now = Date.now();
+  const isFresh = data._last_update && (now - new Date(data._last_update).getTime() < 5000);
+  if (isFresh) {
+    freshness.textContent = 'State Fresh';
+    freshness.classList.remove('stale');
+  } else {
+    freshness.textContent = 'State Stale';
+    freshness.classList.add('stale');
+  }
+
   const offline = document.getElementById('offlineOverlay');
   if (!data.is_active && data.swarm_id === 'not-initialized') {
     offline.classList.add('show');
@@ -625,6 +709,10 @@ function renderAgents(agents) {
     const tokens = a.tokens;
     const modelLabel = a.resolved_model && a.resolved_model !== a.model ? `${a.model} → ${a.resolved_model}` : a.model;
     const shouldPulse = PHASE_PULSE.includes(phase);
+    const task = a.task || {};
+    const verifStatus = task.verification_status || 'pending';
+    const attemptCount = task.attempt_count || 0;
+    const maxAttempts = task.max_attempts || 3;
 
     if (!card) {
       card = document.createElement('div');
@@ -646,6 +734,10 @@ function renderAgents(agents) {
         <div class="bar-group">
           <div class="bar-label"><span>Context Usage</span><span class="ctx-pct"></span></div>
           <div class="bar-track"><div class="bar-fill ctx-bar" style="width:0%;--bar-color:#f59e0b;--bar-color2:#ef4444;"></div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap;">
+          <span class="verification-pill pending">Verify: pending</span>
+          <span style="font-size:0.7rem;color:var(--muted);">Attempt: <span class="attempt-count">0/3</span></span>
         </div>
         <div class="mini-grid">
           <div class="mini-stat"><div class="val tok-prompt">0</div><div class="lbl">Prompt</div></div>
@@ -683,8 +775,14 @@ function renderAgents(agents) {
     card.querySelector('.ctx-pct').textContent = ctx_pct.toFixed(1) + '%';
     card.querySelector('.ctx-bar').style.width = Math.min(ctx_pct, 100) + '%';
     const uptimeSec = a.spawn_time ? Math.floor((Date.now() - new Date(a.spawn_time).getTime()) / 1000) : 0;
-    const taskDesc = a.task && a.task.description ? a.task.description : 'No task assigned';
-    const taskStatus = a.task ? a.task.status : '—';
+    const taskDesc = task.description ? task.description : 'No task assigned';
+    const taskStatus = task.status ? task.status : '—';
+
+    // Update verification pill
+    const verifPill = card.querySelector('.verification-pill');
+    verifPill.textContent = 'Verify: ' + verifStatus;
+    verifPill.className = 'verification-pill ' + verifStatus;
+    card.querySelector('.attempt-count').textContent = `${attemptCount}/${maxAttempts}`;
 
     card.querySelector('.tok-prompt').textContent = formatNum(tokens.prompt_tokens || 0);
     card.querySelector('.tok-comp').textContent = formatNum(tokens.completion_tokens || 0);
@@ -717,6 +815,7 @@ function renderLegend() {
 }
 
 function handleData(data) {
+  data._last_update = new Date().toISOString();
   updateTop(data);
   renderAgents(data.agents || []);
   renderLegend();
@@ -886,7 +985,43 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "active_agents": 0,
             "completed_tasks": 0,
             "total_tasks": 0,
+            "total_iterations": 0,
+            "last_verification": None,
         }
+
+    def _check_state_freshness(self) -> dict[str, Any]:
+        """Check if the state file is fresh and return verification info."""
+        path = self.state_path
+        if not path.exists():
+            return {
+                "is_state_fresh": False,
+                "last_update_timestamp": None,
+                "agent_count": 0,
+                "iteration_count": 0,
+                "state_exists": False,
+            }
+        try:
+            mtime = path.stat().st_mtime
+            is_fresh = (time.time() - mtime) < 5.0
+            state = self._read_state()
+            return {
+                "is_state_fresh": is_fresh,
+                "last_update_timestamp": datetime.fromtimestamp(mtime).isoformat(),
+                "agent_count": len(state.get("agents", [])),
+                "iteration_count": state.get("total_iterations", 0),
+                "state_exists": True,
+                "swarm_id": state.get("swarm_id", "not-initialized"),
+                "is_active": state.get("is_active", False),
+            }
+        except Exception as e:
+            return {
+                "is_state_fresh": False,
+                "last_update_timestamp": None,
+                "agent_count": 0,
+                "iteration_count": 0,
+                "state_exists": True,
+                "error": str(e),
+            }
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/" or self.path == "/index.html":
@@ -898,6 +1033,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/api/status":
             self._send_json(self._read_state())
+        elif self.path == "/api/verify":
+            self._send_json(self._check_state_freshness())
         elif self.path == "/api/events":
             self._handle_sse()
         else:
@@ -943,12 +1080,28 @@ def start_dashboard(
     state_path: Path | str | None = None,
     open_browser: bool = True,
 ) -> int:
-    """Start the dashboard server. Returns the bound port number."""
+    """Start the dashboard server. Returns the bound port number.
+
+    Unified startup that respects existing dashboards (both persistent
+    and in-process) and deduplicates browser tab opens.
+    """
     global _server_instance, _server_thread
 
+    # 1. Check if a persistent background dashboard is already running
+    existing_persistent = find_running_dashboard(state_path)
+    if existing_persistent is not None:
+        if open_browser and _should_open_browser(state_path):
+            webbrowser.open(f"http://127.0.0.1:{existing_persistent}")
+            _mark_browser_opened(state_path)
+        return existing_persistent
+
+    # 2. Check if an in-process dashboard is already running
     if _server_instance is not None:
-        # Already running — return existing port
-        return _server_instance.server_address[1]  # type: ignore[return-value]
+        actual_port = _server_instance.server_address[1]  # type: ignore[return-value]
+        if open_browser and _should_open_browser(state_path):
+            webbrowser.open(f"http://127.0.0.1:{actual_port}")
+            _mark_browser_opened(state_path)
+        return actual_port
 
     handler = type("Handler", (DashboardHandler,), {})
     if state_path:
@@ -985,10 +1138,11 @@ def start_dashboard(
     threading.Thread(target=broadcaster_loop, daemon=True).start()
 
     url = f"http://127.0.0.1:{actual_port}"
-    if open_browser:
+    if open_browser and _should_open_browser(state_path):
         # Small delay so the server is definitely listening
         time.sleep(0.15)
         webbrowser.open(url)
+        _mark_browser_opened(state_path)
 
     return actual_port
 
@@ -1000,6 +1154,58 @@ def stop_dashboard() -> None:
         _server_instance.shutdown()
         _server_instance = None
         _server_thread = None
+
+
+def broadcast_now(state_path: Path | str | None = None) -> None:
+    """Force an immediate SSE broadcast of the current state."""
+    path = Path(state_path) if state_path else DEFAULT_STATE_PATH
+    if not path.exists():
+        return
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        _broadcaster.broadcast(data)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Browser deduplication
+# ---------------------------------------------------------------------------
+
+_BROWSER_OPEN_COOLDOWN_SECONDS = 30
+
+
+def _browser_lock_path(state_path: Path | str | None = None) -> Path:
+    """Path to a timestamp file tracking the last browser open."""
+    if state_path:
+        p = Path(state_path)
+        return p.parent / "kimi-swarm-browser.lock"
+    return Path.home() / ".kimi" / "kimi-swarm-browser.lock"
+
+
+def _should_open_browser(state_path: Path | str | None = None, cooldown: int = _BROWSER_OPEN_COOLDOWN_SECONDS) -> bool:
+    """Return True if enough time has passed since the last browser open."""
+    lock = _browser_lock_path(state_path)
+    if not lock.exists():
+        return True
+    try:
+        with open(lock, "r") as f:
+            last_open = float(f.read().strip())
+        return (time.time() - last_open) > cooldown
+    except Exception:
+        return True
+
+
+def _mark_browser_opened(state_path: Path | str | None = None) -> None:
+    """Record the current timestamp as the last browser open time."""
+    lock = _browser_lock_path(state_path)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1049,11 +1255,16 @@ def launch_persistent_dashboard(
     state_path: Path | str | None = None,
     open_browser: bool = True,
 ) -> int:
-    """Launch a persistent background dashboard process. Returns the port."""
+    """Launch a persistent background dashboard process. Returns the port.
+
+    Deduplicates against existing persistent dashboards and respects
+    the browser-open cooldown so only one tab is opened per session.
+    """
     existing = find_running_dashboard(state_path)
     if existing is not None:
-        if open_browser:
+        if open_browser and _should_open_browser(state_path):
             webbrowser.open(f"http://127.0.0.1:{existing}")
+            _mark_browser_opened(state_path)
         return existing
 
     # Build the command to run a standalone blocking server
@@ -1099,8 +1310,9 @@ def launch_persistent_dashboard(
         # Fallback: try to detect from the process
         actual_port = port if port != 0 else 0
 
-    if open_browser and actual_port:
+    if open_browser and actual_port and _should_open_browser(state_path):
         webbrowser.open(f"http://127.0.0.1:{actual_port}")
+        _mark_browser_opened(state_path)
 
     return actual_port or 0
 
@@ -1126,6 +1338,19 @@ def stop_persistent_dashboard(state_path: Path | str | None = None) -> None:
             meta.unlink()
         except Exception:
             pass
+
+
+def stop_all_dashboards(state_path: Path | str | None = None) -> None:
+    """Stop both in-process and persistent dashboard servers."""
+    stop_dashboard()
+    stop_persistent_dashboard(state_path=state_path)
+    # Also clear browser lock so a fresh init can open a new tab
+    try:
+        lock = _browser_lock_path(state_path)
+        if lock.exists():
+            lock.unlink()
+    except Exception:
+        pass
 
 
 def run_standalone(

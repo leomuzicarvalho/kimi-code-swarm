@@ -17,6 +17,7 @@ from .web_dashboard import (
     stop_dashboard,
     launch_persistent_dashboard,
     stop_persistent_dashboard,
+    stop_all_dashboards,
 )
 
 
@@ -216,8 +217,7 @@ def cmd_shutdown(args: argparse.Namespace) -> int:
     print(f"🔴 Swarm {status.swarm_id} shut down")
     if args.clear_state:
         orch.clear_state()
-    stop_dashboard()
-    stop_persistent_dashboard(state_path=orch._state_path)
+    stop_all_dashboards(state_path=orch._state_path)
     _current_orchestrator = None
     return 0
 

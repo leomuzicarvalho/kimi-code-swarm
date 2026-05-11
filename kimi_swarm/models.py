@@ -118,6 +118,11 @@ class TaskInfo:
     result: str = ""
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
+    attempt_count: int = 0
+    max_attempts: int = 3
+    verification_status: str = "pending"  # pending, passed, failed
+    verification_feedback: str = ""
+    last_iteration_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +133,11 @@ class TaskInfo:
             "result": self.result,
             "created_at": self.created_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "attempt_count": self.attempt_count,
+            "max_attempts": self.max_attempts,
+            "verification_status": self.verification_status,
+            "verification_feedback": self.verification_feedback,
+            "last_iteration_at": self.last_iteration_at.isoformat() if self.last_iteration_at else None,
         }
 
     @classmethod
@@ -135,6 +145,9 @@ class TaskInfo:
         completed_at = None
         if data.get("completed_at"):
             completed_at = datetime.fromisoformat(data["completed_at"])
+        last_iteration_at = None
+        if data.get("last_iteration_at"):
+            last_iteration_at = datetime.fromisoformat(data["last_iteration_at"])
         return cls(
             task_id=data.get("task_id", str(uuid.uuid4())[:8]),
             description=data.get("description", ""),
@@ -143,6 +156,44 @@ class TaskInfo:
             result=data.get("result", ""),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             completed_at=completed_at,
+            attempt_count=data.get("attempt_count", 0),
+            max_attempts=data.get("max_attempts", 3),
+            verification_status=data.get("verification_status", "pending"),
+            verification_feedback=data.get("verification_feedback", ""),
+            last_iteration_at=last_iteration_at,
+        )
+
+
+@dataclass
+class VerificationResult:
+    """Result of a verification check."""
+
+    passed: bool = False
+    feedback: str = ""
+    checked_at: datetime = field(default_factory=datetime.now)
+    web_ui_ok: bool = False
+    web_ui_details: str = ""
+    iteration_number: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "feedback": self.feedback,
+            "checked_at": self.checked_at.isoformat(),
+            "web_ui_ok": self.web_ui_ok,
+            "web_ui_details": self.web_ui_details,
+            "iteration_number": self.iteration_number,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> VerificationResult:
+        return cls(
+            passed=data.get("passed", False),
+            feedback=data.get("feedback", ""),
+            checked_at=datetime.fromisoformat(data["checked_at"]) if data.get("checked_at") else datetime.now(),
+            web_ui_ok=data.get("web_ui_ok", False),
+            web_ui_details=data.get("web_ui_details", ""),
+            iteration_number=data.get("iteration_number", 0),
         )
 
 
@@ -217,6 +268,8 @@ class SwarmStatus:
     created_at: datetime = field(default_factory=datetime.now)
     is_active: bool = True
     entry_point_agent_id: str = ""
+    total_iterations: int = 0
+    last_verification: VerificationResult | None = None
 
     @property
     def active_agents(self) -> int:
@@ -256,10 +309,15 @@ class SwarmStatus:
             "completed_tasks": self.completed_tasks,
             "total_tasks": self.total_tasks,
             "entry_point_agent_id": self.entry_point_agent_id,
+            "total_iterations": self.total_iterations,
+            "last_verification": self.last_verification.to_dict() if self.last_verification else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SwarmStatus:
+        last_verification = None
+        if data.get("last_verification"):
+            last_verification = VerificationResult.from_dict(data["last_verification"])
         return cls(
             swarm_id=data["swarm_id"],
             topology=SwarmTopology(data["topology"]),
@@ -269,4 +327,6 @@ class SwarmStatus:
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             is_active=data.get("is_active", True),
             entry_point_agent_id=data.get("entry_point_agent_id", ""),
+            total_iterations=data.get("total_iterations", 0),
+            last_verification=last_verification,
         )
