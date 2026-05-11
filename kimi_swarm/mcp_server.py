@@ -167,17 +167,54 @@ def agent_spawn(
 
 @mcp.tool()
 def agent_execute(agent_id: str, prompt: str) -> dict[str, Any]:
-    """Execute a task on an agent."""
+    """Execute a task on an agent.
+
+    If the agent fails, do NOT take over the task yourself. Keep the swarm
+    cycle alive by routing the failure to the entry-point agent using
+    agent_execute or agent_assign so it can coordinate reassignment.
+    """
     orch = _get_orch()
-    result = orch.execute_task(agent_id, prompt)
+    try:
+        result = orch.execute_task(agent_id, prompt)
+    except Exception as exc:
+        # Graceful failure — never let a tool exception break the swarm cycle
+        result = {
+            "status": "failed",
+            "mode": "native_kimi",
+            "result": str(exc),
+            "tokens": {},
+        }
+
     status = orch.get_status()
+    markdown = KimiDisplay.status_to_markdown(status)
+
+    # If the agent failed, append explicit guidance to keep the swarm cycle alive
+    if result.get("status") != "completed":
+        ep = orch.get_entry_point_agent()
+        if ep:
+            guidance = (
+                f"\n\n⚠️ **Agent `{agent_id}` task failed.**\n\n"
+                f"**Do NOT take over this task yourself.** To keep the swarm cycle alive, "
+                f"route this failure to the entry-point agent `{ep.name}` (`{ep.agent_id}`) "
+                f"using `agent_execute(agent_id='{ep.agent_id}', prompt='...')` or "
+                f"`agent_assign(agent_id='{ep.agent_id}', task_description='...')` for "
+                f"coordination and reassignment."
+            )
+        else:
+            guidance = (
+                f"\n\n⚠️ **Agent `{agent_id}` task failed.**\n\n"
+                f"**Do NOT take over this task yourself.** To keep the swarm cycle alive, "
+                f"spawn a coordinator agent and route this failure to it for reassignment."
+            )
+        markdown = markdown + guidance
+
     return {
         "agent_id": agent_id,
         "status": result.get("status"),
         "mode": result.get("mode", "native_kimi"),
         "result": result.get("result", ""),
         "tokens": result.get("tokens", {}),
-        "markdown": KimiDisplay.status_to_markdown(status),
+        "markdown": markdown,
         "short": KimiDisplay.short_status(status),
         "todos": _status_to_todos(status),
     }

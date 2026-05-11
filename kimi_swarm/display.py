@@ -21,6 +21,13 @@ class KimiDisplay:
         lines.append(f"📊 **Overall Progress:** {status.overall_progress:.1f}%  |  **Tasks:** {status.completed_tasks}/{status.total_tasks} completed")
         lines.append("")
 
+        # Entry-point agent
+        if status.entry_point_agent_id:
+            ep_agent = next((a for a in status.agents if a.agent_id == status.entry_point_agent_id), None)
+            if ep_agent:
+                lines.append(f"🎯 **Entry-point agent:** `{ep_agent.name}` (`{ep_agent.agent_id}`) — use this agent to coordinate and route failures.")
+                lines.append("")
+
         # Main agent context window
         main = status.main_context
         lines.append("### 🧠 Main Agent Context")

@@ -216,6 +216,7 @@ class SwarmStatus:
     main_context: ContextWindow = field(default_factory=lambda: ContextWindow(used_tokens=0, max_tokens=128000))
     created_at: datetime = field(default_factory=datetime.now)
     is_active: bool = True
+    entry_point_agent_id: str = ""
 
     @property
     def active_agents(self) -> int:
@@ -254,6 +255,7 @@ class SwarmStatus:
             "active_agents": self.active_agents,
             "completed_tasks": self.completed_tasks,
             "total_tasks": self.total_tasks,
+            "entry_point_agent_id": self.entry_point_agent_id,
         }
 
     @classmethod
@@ -266,4 +268,5 @@ class SwarmStatus:
             main_context=ContextWindow.from_dict(data.get("main_context", {})),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             is_active=data.get("is_active", True),
+            entry_point_agent_id=data.get("entry_point_agent_id", ""),
         )

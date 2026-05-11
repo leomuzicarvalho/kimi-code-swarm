@@ -133,6 +133,32 @@ class TestOrchestrator:
         assert status.completed_tasks == 1
         assert status.total_tasks == 2
 
+    def test_entry_point_agent(self):
+        orch = SwarmOrchestrator()
+        orch.init_swarm()
+        assert orch.entry_point_agent_id == ""
+        a1 = orch.spawn_agent(AgentConfig(type="architect", name="arch-1"))
+        assert orch.entry_point_agent_id == a1.agent_id
+        a2 = orch.spawn_agent(AgentConfig(type="coder", name="coder-1"))
+        # Entry-point should stay as the first agent
+        assert orch.entry_point_agent_id == a1.agent_id
+        assert orch.get_entry_point_agent().name == "arch-1"
+
+    def test_state_persists_entry_point_agent(self):
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = os.path.join(tmpdir, "state.json")
+            orch = SwarmOrchestrator(state_path=state_path)
+            orch.init_swarm()
+            a1 = orch.spawn_agent(AgentConfig(type="architect", name="arch-1"))
+            orch.save_state()
+
+            orch2 = SwarmOrchestrator(state_path=state_path)
+            assert orch2.load_state()
+            assert orch2.entry_point_agent_id == a1.agent_id
+            assert orch2.get_entry_point_agent().name == "arch-1"
+
 
 class TestDisplay:
     def test_markdown_output(self):
@@ -275,3 +301,44 @@ class TestDashboardIntegration:
             assert result["status"] == "stopped"
             assert "Dashboard stopped" in result["markdown"]
             mock_stop.assert_called_once_with(state_path=mcp_server._state_path)
+
+    def test_agent_execute_graceful_failure_routes_to_entry_point(self):
+        """Verify agent_execute catches exceptions and returns guidance to route to entry-point agent."""
+        from kimi_swarm import mcp_server
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            result = mcp_server.agent_spawn(agent_type="architect", name="coord", model="sonnet")
+            ep_id = result["agent_id"]
+            assert ep_id == mcp_server._orch.entry_point_agent_id
+
+            # Execute on a non-existent agent — should NOT raise
+            result = mcp_server.agent_execute(agent_id="no-such-agent", prompt="do something")
+            assert result["status"] == "failed"
+            assert "Do NOT take over this task yourself" in result["markdown"]
+            assert ep_id in result["markdown"]
+            assert "agent_execute" in result["markdown"]
+
+    def test_agent_execute_failure_includes_entry_point_guidance(self):
+        """Verify agent_execute failure response tells Kimi to route to entry-point agent."""
+        from kimi_swarm import mcp_server
+        from kimi_swarm.orchestrator import SwarmOrchestrator
+
+        with patch.object(mcp_server, "launch_persistent_dashboard", return_value=64038):
+            mcp_server._orch = None
+            if mcp_server._state_path.exists():
+                mcp_server._state_path.unlink()
+
+            mcp_server.swarm_init(topology="hierarchical", max_agents=3)
+            mcp_server.agent_spawn(agent_type="coder", name="worker", model="haiku")
+
+            # Force a failure by patching execute_task to return failed status
+            with patch.object(SwarmOrchestrator, "execute_task", return_value={"status": "failed", "result": "bad output", "tokens": {}}):
+                result = mcp_server.agent_execute(agent_id="worker", prompt="task")
+                assert result["status"] == "failed"
+                assert "Do NOT take over this task yourself" in result["markdown"]
+                assert "entry-point agent" in result["markdown"]

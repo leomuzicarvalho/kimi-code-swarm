@@ -43,6 +43,7 @@ class SwarmOrchestrator:
         self._is_active = False
         self._main_context = ContextWindow(used_tokens=0, max_tokens=128000)
         self._state_path = Path(state_path) if state_path else DEFAULT_STATE_PATH
+        self.entry_point_agent_id: str = ""
 
     def init_swarm(self) -> SwarmStatus:
         """Initialize the swarm via MCP."""
@@ -77,6 +78,9 @@ class SwarmOrchestrator:
             context=ContextWindow(used_tokens=0, max_tokens=max_tokens),
         )
         self._agents[agent_id] = agent
+        # First spawned agent becomes the entry-point agent
+        if not self.entry_point_agent_id:
+            self.entry_point_agent_id = agent_id
         self.save_state()
         return agent
 
@@ -175,6 +179,7 @@ class SwarmOrchestrator:
             agents=list(self._agents.values()),
             main_context=self._main_context,
             is_active=self._is_active,
+            entry_point_agent_id=self.entry_point_agent_id,
         )
 
     def update_main_context(self, used_tokens: int) -> None:
@@ -203,6 +208,7 @@ class SwarmOrchestrator:
             self._agents = {a.agent_id: a for a in status.agents}
             self._main_context = status.main_context
             self._is_active = status.is_active
+            self.entry_point_agent_id = status.entry_point_agent_id
             return True
         except Exception:
             return False
@@ -211,6 +217,12 @@ class SwarmOrchestrator:
         """Remove persisted state file."""
         if self._state_path.exists():
             self._state_path.unlink()
+
+    def get_entry_point_agent(self) -> AgentStatus | None:
+        """Return the swarm's entry-point (coordinator) agent, or None."""
+        if self.entry_point_agent_id and self.entry_point_agent_id in self._agents:
+            return self._agents[self.entry_point_agent_id]
+        return None
 
     def _get_agent(self, agent_id: str) -> AgentStatus:
         if agent_id not in self._agents:

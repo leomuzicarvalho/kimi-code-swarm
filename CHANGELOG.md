@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Swarm cycle dies on first agent failure** — When an `agent_execute` call failed (or threw an exception), Kimi would abandon the swarm and take over the task directly. The MCP tool now catches all exceptions and returns a structured failure response. Crucially, the response markdown includes explicit guidance: **"Do NOT take over this task yourself. Route this failure to the entry-point agent ... for coordination and reassignment."** This keeps the swarm cycle alive by giving Kimi a concrete next step inside the tool layer rather than falling back to direct execution.
+
+### Added
+
+- **Entry-point agent tracking** — The first agent spawned in a swarm is automatically designated as the *entry-point agent* (coordinator). Its ID is stored in `SwarmStatus.entry_point_agent_id` and persisted across sessions. The orchestrator exposes `get_entry_point_agent()` for lookups. The swarm status markdown now prominently displays `🎯 Entry-point agent: {name} ({id})` so Kimi always knows who to route failures to.
+
+### Fixed
+
 - **Apple Silicon architecture mismatch in MCP config** — On Apple Silicon Macs with universal Python binaries, the MCP server could fail intermittently with `mach-o file, but is an incompatible architecture`. This occurred when native extension packages (e.g., `pydantic-core`, `rpds-py`) were compiled for x86_64 (e.g., via Rosetta) but the MCP server spawned as arm64. `install.sh` now detects this situation and writes the MCP config with an `arch -arm64` wrapper (`"command": "arch", "args": ["-arm64", "python3", ...]`), ensuring deterministic arm64 execution regardless of parent process architecture. Updated README with manual configuration instructions for this scenario.
 
 ### Added
