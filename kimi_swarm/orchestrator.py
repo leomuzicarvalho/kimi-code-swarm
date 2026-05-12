@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,8 @@ class SwarmOrchestrator:
         self.total_iterations: int = 0
         self._last_verification: VerificationResult | None = None
         self._dashboard_broadcast: Any | None = None  # injected from mcp_server
+        self._bg_threads: dict[str, threading.Thread] = {}
+        self._bg_results: dict[str, dict[str, Any]] = {}
 
     def init_swarm(self) -> SwarmStatus:
         """Initialize the swarm via MCP."""
@@ -343,6 +346,116 @@ class SwarmOrchestrator:
             "route_to_entry_point": self.entry_point_agent_id,
             "needs_retry": False,
         }
+
+    def execute_task_async(self, agent_id: str, prompt: str) -> dict[str, Any]:
+        """Execute a task in a background thread so the caller isn't blocked.
+
+        Returns immediately with an 'accepted' status. The actual result is
+        stored and can be retrieved via agent_status() or swarm_status().
+        """
+        agent = self._get_agent(agent_id)
+
+        # Kill any existing background thread for this agent
+        self._kill_bg_thread(agent_id)
+
+        agent.phase = AgentPhase.EXECUTING
+        agent.last_active = datetime.now()
+        if agent.task is None:
+            self.assign_task(agent_id, prompt)
+        agent.task.status = "in_progress"
+        self.save_state()
+        self._broadcast_now()
+
+        def _run() -> None:
+            try:
+                result = self.execute_task(agent_id, prompt)
+                self._bg_results[agent_id] = result
+            except Exception as exc:
+                self._bg_results[agent_id] = {
+                    "status": "failed",
+                    "agent_id": agent_id,
+                    "result": str(exc),
+                }
+
+        t = threading.Thread(target=_run, daemon=True)
+        self._bg_threads[agent_id] = t
+        t.start()
+
+        return {
+            "status": "accepted",
+            "agent_id": agent_id,
+            "message": f"Task accepted for {agent.name}. Use swarm_status() or agent_status() to monitor progress.",
+        }
+
+    def execute_with_verification_async(
+        self,
+        agent_id: str,
+        prompt: str,
+        verifier_agent_id: str | None = None,
+        max_iterations: int = 3,
+        verification_prompt: str = "",
+    ) -> dict[str, Any]:
+        """Run the verification loop in a background thread.
+
+        Returns immediately with an 'accepted' status.
+        """
+        agent = self._get_agent(agent_id)
+        self._kill_bg_thread(agent_id)
+
+        agent.phase = AgentPhase.EXECUTING
+        agent.last_active = datetime.now()
+        if agent.task is None:
+            self.assign_task(agent_id, prompt, max_attempts=max_iterations)
+        agent.task.status = "in_progress"
+        self.save_state()
+        self._broadcast_now()
+
+        def _run() -> None:
+            try:
+                result = self.execute_with_verification(
+                    agent_id=agent_id,
+                    prompt=prompt,
+                    verifier_agent_id=verifier_agent_id,
+                    max_iterations=max_iterations,
+                    verification_prompt=verification_prompt,
+                )
+                self._bg_results[agent_id] = result
+            except Exception as exc:
+                self._bg_results[agent_id] = {
+                    "status": "failed",
+                    "agent_id": agent_id,
+                    "result": str(exc),
+                }
+
+        t = threading.Thread(target=_run, daemon=True)
+        self._bg_threads[agent_id] = t
+        t.start()
+
+        return {
+            "status": "accepted",
+            "agent_id": agent_id,
+            "message": (
+                f"Verification loop accepted for {agent.name} "
+                f"(up to {max_iterations} iterations). "
+                f"Use swarm_status() or agent_status() to monitor progress."
+            ),
+        }
+
+    def _kill_bg_thread(self, agent_id: str) -> None:
+        """Stop an existing background thread for an agent."""
+        old = self._bg_threads.pop(agent_id, None)
+        if old and old.is_alive():
+            # We can't truly kill a Python thread, but we can mark the agent
+            # as terminated so the next loop iteration exits early
+            try:
+                agent = self._get_agent(agent_id)
+                agent.phase = AgentPhase.TERMINATED
+            except KeyError:
+                pass
+
+    def get_bg_result(self, agent_id: str) -> dict[str, Any] | None:
+        """Get the result of a background task if it has completed."""
+        return self._bg_results.get(agent_id)
 
     def acknowledge_failure(self, agent_id: str) -> dict[str, Any]:
         """Main agent acknowledges a failure, digests loop info, and prepares for reassignment.

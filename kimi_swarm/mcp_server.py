@@ -188,52 +188,40 @@ def agent_spawn(
 def agent_execute(agent_id: str, prompt: str) -> dict[str, Any]:
     """Execute a task on an agent.
 
-    If the agent fails, do NOT take over the task yourself. Keep the swarm
-    cycle alive by routing the failure to the entry-point agent using
-    agent_execute or agent_assign so it can coordinate reassignment.
+    The task runs in a background thread so this tool returns immediately.
+    Poll swarm_status() or agent_status() to monitor progress and see the result.
     """
     orch = _get_orch()
     try:
-        result = orch.execute_task(agent_id, prompt)
+        result = orch.execute_task_async(agent_id, prompt)
     except Exception as exc:
-        # Graceful failure — never let a tool exception break the swarm cycle
         result = {
             "status": "failed",
-            "mode": "native_kimi",
+            "agent_id": agent_id,
             "result": str(exc),
-            "tokens": {},
         }
 
     status = orch.get_status()
     markdown = KimiDisplay.status_to_markdown(status)
 
-    # If the agent failed, append explicit guidance to keep the swarm cycle alive
-    if result.get("status") != "completed":
-        ep = orch.get_entry_point_agent()
-        if ep:
-            guidance = (
-                f"\n\n⚠️ **Agent `{agent_id}` task failed.**\n\n"
-                f"**Do NOT take over this task yourself.** To keep the swarm cycle alive, "
-                f"route this failure to the entry-point agent `{ep.name}` (`{ep.agent_id}`) "
-                f"using `agent_execute(agent_id='{ep.agent_id}', prompt='...')` or "
-                f"`agent_assign(agent_id='{ep.agent_id}', task_description='...')` for "
-                f"coordination and reassignment."
-            )
-        else:
-            guidance = (
-                f"\n\n⚠️ **Agent `{agent_id}` task failed.**\n\n"
-                f"**Do NOT take over this task yourself.** To keep the swarm cycle alive, "
-                f"spawn a coordinator agent and route this failure to it for reassignment."
-            )
-        markdown = markdown + guidance
+    if result.get("status") == "accepted":
+        md_addition = (
+            f"\n\n🚀 **Task accepted for agent `{agent_id}`**\n\n"
+            f"The agent is executing in the background. "
+            f"Call `swarm_status()` or `agent_status(agent_id='{agent_id}')` "
+            f"to check progress and retrieve the final result."
+        )
+    else:
+        md_addition = (
+            f"\n\n⚠️ **Agent `{agent_id}` task failed to start.**\n\n"
+            f"{result.get('result', '')}"
+        )
 
     return {
         "agent_id": agent_id,
         "status": result.get("status"),
-        "mode": result.get("mode", "native_kimi"),
         "result": result.get("result", ""),
-        "tokens": result.get("tokens", {}),
-        "markdown": markdown,
+        "markdown": markdown + md_addition,
         "short": KimiDisplay.short_status(status),
         "todos": _status_to_todos(status),
     }
@@ -249,23 +237,14 @@ def agent_execute_with_verification(
 ) -> dict[str, Any]:
     """Execute a task with automatic verification loop.
 
-    Flow:
-    1. Task executes on agent_id
-    2. If verifier_agent_id is provided, verification runs
-    3. If verification passes → success
-    4. If verification fails AND iterations remain:
-       - Failure is acknowledged
-       - Feedback is stored
-       - Result includes route_to_entry_point for reassignment
-    5. If max iterations exceeded → final failure
-
-    After EVERY iteration, the web dashboard is updated.
+    The loop runs in a background thread so this tool returns immediately.
+    Poll swarm_status() or agent_status() to monitor progress and see the result.
     """
     orch = _get_orch()
     verifier_id = verifier_agent_id if verifier_agent_id else None
 
     try:
-        result = orch.execute_with_verification(
+        result = orch.execute_with_verification_async(
             agent_id=agent_id,
             prompt=prompt,
             verifier_agent_id=verifier_id,
@@ -276,55 +255,30 @@ def agent_execute_with_verification(
         result = {
             "status": "failed",
             "agent_id": agent_id,
-            "iteration": 0,
             "result": str(exc),
-            "route_to_entry_point": orch.entry_point_agent_id,
-            "needs_retry": False,
         }
 
     status = orch.get_status()
     markdown = KimiDisplay.status_to_markdown(status)
 
-    # Build loop-aware markdown
-    iter_info = result.get("iteration", 1)
-    max_iter = result.get("max_iterations", max_iterations)
-    verif = result.get("verification")
-
-    if result.get("status") == "completed":
+    if result.get("status") == "accepted":
         loop_md = (
-            f"\n\n✅ **Agentic Loop Complete** — Iteration {iter_info}/{max_iter}\n"
-            f"- Agent: `{agent_id}`\n"
-            f"- Verification: {'PASSED' if verif and verif.get('passed') else 'N/A'}\n"
-            f"- Web UI: {'✅ Updated' if verif and verif.get('web_ui_ok') else '❌ Stale'}\n"
-        )
-    elif result.get("needs_retry"):
-        ep = orch.get_entry_point_agent()
-        loop_md = (
-            f"\n\n🔁 **Agentic Loop — Retry Required** — Iteration {iter_info}/{max_iter}\n"
-            f"- Agent: `{agent_id}`\n"
-            f"- Verification: ❌ FAILED\n"
-            f"- Feedback: {verif.get('feedback', 'N/A')[:200] if verif else 'N/A'}\n"
-            f"- Web UI: {'✅ Updated' if verif and verif.get('web_ui_ok') else '❌ Stale'}\n"
-            f"- **Next:** Route to entry-point `{ep.name if ep else 'N/A'}` "
-            f"(`{result.get('route_to_entry_point', 'N/A')}`) for reassignment\n"
+            f"\n\n🚀 **Verification loop accepted for agent `{agent_id}`**\n\n"
+            f"The agentic loop is running in the background "
+            f"(up to {max_iterations} iterations). "
+            f"Call `swarm_status()` or `agent_status(agent_id='{agent_id}')` "
+            f"to check progress and retrieve the final result."
         )
     else:
         loop_md = (
-            f"\n\n❌ **Agentic Loop — Max Iterations Exceeded** ({max_iter})\n"
-            f"- Agent: `{agent_id}`\n"
-            f"- Final verification: FAILED\n"
-            f"- **Action:** Manual review or reassignment required\n"
+            f"\n\n⚠️ **Agent `{agent_id}` loop failed to start.**\n\n"
+            f"{result.get('result', '')}"
         )
 
     return {
         "agent_id": agent_id,
         "status": result.get("status"),
-        "iteration": iter_info,
-        "max_iterations": max_iter,
-        "verification": verif,
         "result": result.get("result", ""),
-        "route_to_entry_point": result.get("route_to_entry_point", ""),
-        "needs_retry": result.get("needs_retry", False),
         "markdown": markdown + loop_md,
         "short": KimiDisplay.short_status(status),
         "todos": _status_to_todos(status),
