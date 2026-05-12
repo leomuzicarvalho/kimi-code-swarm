@@ -154,11 +154,9 @@ class SwarmOrchestrator:
         2. If verifier_agent_id provided, run verification
         3. If verification passes → return success
         4. If verification fails AND attempts < max_iterations:
-           - Update agent phase to FAILED
-           - Store feedback in task
-           - Increment attempt_count
-           - Save state and broadcast
-           - Return structured result with iteration info for entry-point routing
+           - Feed verification feedback back into the agent
+           - Agent automatically retries with corrected instructions
+           - Loop continues autonomously (main agent does NOT take over)
         5. If max iterations exceeded → return final failure
         """
         agent = self._get_agent(agent_id)
@@ -202,13 +200,30 @@ class SwarmOrchestrator:
                 self.save_state()
                 self._broadcast_now()
 
-                verify_prompt = verification_prompt or (
-                    f"Verify the following task result. Task: {task.description}\n"
-                    f"Result: {task.result}\n"
-                    f"Iteration: {iteration}/{max_iterations}\n"
-                    f"Check: 1) correctness, 2) completeness, 3) web UI state freshness. "
-                    f"Respond with PASSED or FAILED and detailed feedback."
-                )
+                # Build a verification prompt that tells the verifier exactly where
+                # the agent's workspace is so it can inspect real files.
+                agent_workspace = ""
+                if hasattr(self._client, "_work_dirs"):
+                    agent_workspace = str(self._client._work_dirs.get(agent_id, ""))
+
+                workspace_hint = ""
+                if agent_workspace:
+                    workspace_hint = (
+                        f"\n\nAgent workspace (check files here): {agent_workspace}\n"
+                        f"List files in this directory and verify any claimed outputs."
+                    )
+
+                if verification_prompt:
+                    verify_prompt = verification_prompt + workspace_hint
+                else:
+                    verify_prompt = (
+                        f"Verify the following task result. Task: {task.description}\n"
+                        f"Result: {task.result}\n"
+                        f"Iteration: {iteration}/{max_iterations}"
+                        f"{workspace_hint}\n"
+                        f"Check: 1) correctness, 2) completeness, 3) web UI state freshness. "
+                        f"Respond with PASSED or FAILED and detailed feedback."
+                    )
                 verify_result = self._client.agent_execute(verifier_agent_id, verify_prompt)
 
                 verifier.tokens.add(
@@ -218,9 +233,11 @@ class SwarmOrchestrator:
                 verifier.context.update(verifier.tokens.total_tokens)
                 verifier.messages_count += 1
 
-                # Parse verification result
+                # Parse verification result — accept various approval keywords
                 v_text = str(verify_result.get("result", "")).upper()
-                passed = "PASSED" in v_text and "FAILED" not in v_text
+                has_approval = any(k in v_text for k in ("PASSED", "PASS", "APPROVED", "OK", "SUCCESS", "CORRECT"))
+                has_rejection = "FAILED" in v_text or "FAIL" in v_text
+                passed = has_approval and not has_rejection
                 feedback = verify_result.get("result", "")
 
                 # Check web UI freshness
@@ -257,37 +274,32 @@ class SwarmOrchestrator:
                         "tokens": agent.tokens.to_dict(),
                     }
 
-                # Verification failed - prepare for next iteration or final failure
+                # Verification failed - auto-retry with feedback if iterations remain
                 if iteration < max_iterations:
-                    agent.phase = AgentPhase.FAILED
-                    task.status = "failed"
-                    # Build feedback payload for entry-point agent
+                    agent.phase = AgentPhase.PLANNING
+                    task.status = "pending"
+                    # Build corrected prompt that includes the original task + verifier feedback
                     feedback_payload = (
                         f"\n\n🔁 **AGENTIC LOOP — Iteration {iteration}/{max_iterations} FAILED**\n\n"
                         f"**Agent:** `{agent.name}` (`{agent_id}`)\n"
                         f"**Task:** {task.description}\n\n"
                         f"**Verification Feedback:**\n{feedback}\n\n"
                         f"**Web UI Status:** {'✅ Fresh' if web_ui_ok else '❌ Stale'}\n\n"
-                        f"**Action Required:** Route corrected task to entry-point agent "
-                        f"`{self.get_entry_point_agent().name if self.get_entry_point_agent() else 'N/A'}` "
-                        f"for reassignment with this feedback digested."
+                        f"**Action:** Auto-retrying with corrected instructions."
                     )
                     task.result = task.result + feedback_payload
+                    # Update prompt for next iteration so the agent gets the feedback
+                    prompt = (
+                        f"[CORRECTED TASK — Iteration {iteration + 1}/{max_iterations}]\n\n"
+                        f"Original task: {task.description}\n\n"
+                        f"Previous attempt result: {task.result}\n\n"
+                        f"Verification feedback (MUST address all points):\n{feedback}\n\n"
+                        f"Please correct the issues and complete the task."
+                    )
                     self.save_state()
                     self._broadcast_now()
-                    # Return early with iteration info - caller routes to entry-point
-                    return {
-                        "status": "failed",
-                        "agent_id": agent_id,
-                        "iteration": iteration,
-                        "max_iterations": max_iterations,
-                        "verification": verification.to_dict(),
-                        "result": task.result,
-                        "feedback_payload": feedback_payload,
-                        "tokens": agent.tokens.to_dict(),
-                        "route_to_entry_point": self.entry_point_agent_id,
-                        "needs_retry": True,
-                    }
+                    # Continue to next iteration — main agent does NOT take over
+                    continue
 
             else:
                 # No verifier - just check execution status

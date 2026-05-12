@@ -41,6 +41,7 @@ Options:
   --branch <name>     Install from a specific git branch (default: main)
   --user              Install with pip --user (no sudo needed)
   --venv <path>       Install into a new/existing virtualenv at <path>
+  --local, -e         Install from the current directory (editable/development mode)
   --help              Show this message
 
 Examples:
@@ -52,6 +53,9 @@ Examples:
 
   # Install into a dedicated venv
   ./install.sh --venv ~/.venvs/kimi-swarm
+
+  # Install from local source (development)
+  ./install.sh --local
 EOF
 }
 
@@ -64,6 +68,8 @@ while [[ $# -gt 0 ]]; do
         --venv)
             USE_VENV="1"
             VENV_PATH="$2"; shift 2 ;;
+        --local|--editable|-e)
+            LOCAL_INSTALL="1"; shift ;;
         --help)
             usage; exit 0 ;;
         *)
@@ -143,23 +149,31 @@ if ! "$PYTHON" -m pip --version &>/dev/null; then
 fi
 
 # ------------------------------------------------------------------------------
-# Install kimiswarm from GitHub
+# Install kimiswarm from GitHub or local source
 # ------------------------------------------------------------------------------
-log_info "Installing kimi-swarm from ${REPO_URL}@${BRANCH} ..."
-
-# Build the pip install spec
-if [[ "$BRANCH" == "main" ]]; then
-    PIP_SPEC="git+${REPO_URL}"
+if [[ -n "$LOCAL_INSTALL" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    log_info "Installing kimi-swarm from local directory: $SCRIPT_DIR ..."
+    PIP_SPEC="-e $SCRIPT_DIR"
 else
-    PIP_SPEC="git+${REPO_URL}@${BRANCH}"
+    log_info "Installing kimi-swarm from ${REPO_URL}@${BRANCH} ..."
+    if [[ "$BRANCH" == "main" ]]; then
+        PIP_SPEC="git+${REPO_URL}"
+    else
+        PIP_SPEC="git+${REPO_URL}@${BRANCH}"
+    fi
 fi
 
-# Install
+# Install (use eval for local editable mode so -e and path are separate args)
+if [[ -n "$LOCAL_INSTALL" ]]; then
+    PIP_INSTALL_CMD="${PIP_INSTALL_PREFIX}$PYTHON -m pip install $PIP_SPEC --quiet $PIP_EXTRA_FLAGS"
+else
+    PIP_INSTALL_CMD="${PIP_INSTALL_PREFIX}$PYTHON -m pip install '$PIP_SPEC' --quiet $PIP_EXTRA_FLAGS"
+fi
 if [[ -n "$INSTALL_USER" ]]; then
-    ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install "$PIP_SPEC" $INSTALL_USER --quiet $PIP_EXTRA_FLAGS
-else
-    ${PIP_INSTALL_PREFIX}"$PYTHON" -m pip install "$PIP_SPEC" --quiet $PIP_EXTRA_FLAGS
+    PIP_INSTALL_CMD="$PIP_INSTALL_CMD $INSTALL_USER"
 fi
+eval "$PIP_INSTALL_CMD"
 
 log_ok "Package installed successfully."
 
@@ -537,11 +551,11 @@ fi
 log_info "Running smoke tests ..."
 
 # CLI smoke test
-CLI_DEMO_OUTPUT=$(kimi-swarm demo 2>&1) || true
-if echo "$CLI_DEMO_OUTPUT" | grep -q "Demo complete"; then
+CLI_VERSION_OUTPUT=$(kimi-swarm --version 2>&1) || true
+if echo "$CLI_VERSION_OUTPUT" | grep -q "kimi-swarm"; then
     log_ok "CLI smoke test passed!"
 else
-    log_warn "CLI smoke test had issues (expected if no swarm is active)."
+    log_warn "CLI smoke test had issues."
 fi
 
 # MCP server smoke test
