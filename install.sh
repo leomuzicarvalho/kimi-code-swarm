@@ -19,6 +19,7 @@ BRANCH="main"
 INSTALL_USER=""
 USE_VENV=""
 VENV_PATH=""
+LOCAL_INSTALL=""
 
 # Colors
 RED='\033[0;31m'
