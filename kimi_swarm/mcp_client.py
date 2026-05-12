@@ -150,7 +150,15 @@ class SwarmMCPClient:
         return self._agent_execute_simulated(agent_id, prompt)
 
     def _agent_execute_real(self, agent_id: str, prompt: str) -> dict[str, Any]:
-        """Execute the prompt via a real Kimi CLI subprocess."""
+        """Execute the prompt via a real Kimi CLI subprocess.
+
+        Uses an *idle timeout* instead of a hard timeout: the agent is only
+        killed if it stops producing output. If it's actively working (printing
+        tool calls, thinking, etc.) it stays alive indefinitely.
+        """
+        import threading
+        import time
+
         work_dir = self._work_dirs.get(agent_id)
         if work_dir is None:
             work_dir = self._workspace_for(agent_id)
@@ -166,7 +174,10 @@ class SwarmMCPClient:
             "--work-dir", str(work_dir),
         ]
 
-        timeout = int(os.environ.get("KIMI_SWARM_AGENT_TIMEOUT", "300"))
+        # Idle timeout: how many seconds of complete silence before we kill it
+        idle_timeout = int(os.environ.get("KIMI_SWARM_AGENT_IDLE_TIMEOUT", "60"))
+        # Absolute max runtime (safety cap) — only enforced if process is still alive
+        max_runtime = int(os.environ.get("KIMI_SWARM_AGENT_MAX_RUNTIME", "1800"))
 
         proc = subprocess.Popen(
             cmd,
@@ -176,17 +187,65 @@ class SwarmMCPClient:
         )
         self._processes[agent_id] = proc
 
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        last_activity = time.time()
+        lock = threading.Lock()
+
+        def _reader(pipe, collector):
+            nonlocal last_activity
+            try:
+                for line in iter(pipe.readline, ""):
+                    with lock:
+                        collector.append(line)
+                        last_activity = time.time()
+            except Exception:
+                pass
+            finally:
+                pipe.close()
+
+        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_lines), daemon=True)
+        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        start_time = time.time()
+        killed_reason = ""
+
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+            while proc.poll() is None:
+                time.sleep(0.5)
+                with lock:
+                    silent_for = time.time() - last_activity
+                    running_for = time.time() - start_time
+
+                if silent_for > idle_timeout:
+                    proc.kill()
+                    killed_reason = f"Agent was idle for {int(silent_for)}s (no output) — killed."
+                    break
+
+                if running_for > max_runtime:
+                    proc.kill()
+                    killed_reason = f"Agent exceeded max runtime of {max_runtime}s — killed."
+                    break
+
+            # Wait for reader threads to finish draining pipes
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+        except Exception as exc:
+            killed_reason = str(exc)
             proc.kill()
-            stdout, stderr = proc.communicate()
+
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
+
+        if killed_reason:
             return {
                 "agent_id": agent_id,
                 "status": "failed",
                 "mode": "native_kimi",
                 "prompt": prompt,
-                "result": f"Agent execution timed out after {timeout}s.",
+                "result": killed_reason,
                 "tokens": {"prompt": len(prompt.split()), "completion": 0, "total": len(prompt.split())},
             }
 

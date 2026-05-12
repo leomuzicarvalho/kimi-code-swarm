@@ -377,7 +377,7 @@ class TestDashboardIntegration:
         """Verify swarm_ui_stop MCP tool stops the dashboard."""
         from kimi_swarm import mcp_server
 
-        with patch.object(mcp_server, "stop_persistent_dashboard") as mock_stop:
+        with patch.object(mcp_server, "stop_all_dashboards") as mock_stop:
             mcp_server._orch = None
             if mcp_server._state_path.exists():
                 mcp_server._state_path.unlink()
@@ -387,7 +387,9 @@ class TestDashboardIntegration:
 
             assert result["status"] == "stopped"
             assert "Dashboard stopped" in result["markdown"]
-            mock_stop.assert_called_once_with(state_path=mcp_server._state_path)
+            # swarm_init calls stop_all_dashboards once; swarm_ui_stop calls it again
+            assert mock_stop.call_count >= 1
+            assert mock_stop.call_args_list[-1].kwargs == {"state_path": mcp_server._state_path}
 
     def test_agent_execute_graceful_failure_routes_to_entry_point(self):
         """Verify agent_execute catches exceptions and returns guidance to route to entry-point agent."""
@@ -477,19 +479,18 @@ class TestAgenticLoopMCP:
                 mcp_server._state_path.unlink()
 
             mcp_server.swarm_init(topology="hierarchical", max_agents=3)
-            mcp_server.agent_spawn(agent_type="coder", name="dev", model="sonnet")
-            mcp_server.agent_spawn(agent_type="tester", name="vfy", model="haiku")
+            dev_result = mcp_server.agent_spawn(agent_type="coder", name="dev", model="sonnet")
+            vfy_result = mcp_server.agent_spawn(agent_type="tester", name="vfy", model="haiku")
 
             result = mcp_server.agent_execute_with_verification(
-                agent_id="dev",
+                agent_id=dev_result["agent_id"],
                 prompt="build auth",
-                verifier_agent_id="vfy",
+                verifier_agent_id=vfy_result["agent_id"],
                 max_iterations=2,
             )
-            assert result["status"] == "completed"
-            assert result["iteration"] == 1
-            assert result["needs_retry"] is False
-            assert "Agentic Loop Complete" in result["markdown"]
+            # Async: returns "accepted" immediately; loop runs in background
+            assert result["status"] == "accepted"
+            assert "Verification loop accepted" in result["markdown"]
 
     def test_agent_acknowledge_failure_mcp(self):
         """Verify agent_acknowledge_failure MCP tool works."""
@@ -501,9 +502,11 @@ class TestAgenticLoopMCP:
                 mcp_server._state_path.unlink()
 
             mcp_server.swarm_init(topology="hierarchical", max_agents=3)
-            mcp_server.agent_spawn(agent_type="architect", name="coord", model="sonnet")
+            spawn_result = mcp_server.agent_spawn(agent_type="architect", name="coord", model="sonnet")
+            agent_id = spawn_result["agent_id"]
+            mcp_server.agent_assign(agent_id=agent_id, task_description="test task")
 
-            result = mcp_server.agent_acknowledge_failure(agent_id="coord")
+            result = mcp_server.agent_acknowledge_failure(agent_id=agent_id)
             assert result["status"] == "acknowledged"
             assert "Failure Acknowledged" in result["markdown"]
 
@@ -517,13 +520,13 @@ class TestAgenticLoopMCP:
                 mcp_server._state_path.unlink()
 
             mcp_server.swarm_init(topology="hierarchical", max_agents=3)
-            mcp_server.agent_spawn(agent_type="coder", name="from", model="sonnet")
-            mcp_server.agent_spawn(agent_type="coder", name="to", model="haiku")
-            mcp_server.agent_assign(agent_id="from", task_description="old task")
+            from_result = mcp_server.agent_spawn(agent_type="coder", name="from", model="sonnet")
+            to_result = mcp_server.agent_spawn(agent_type="coder", name="to", model="haiku")
+            mcp_server.agent_assign(agent_id=from_result["agent_id"], task_description="old task")
 
             result = mcp_server.agent_reassign_with_feedback(
-                from_agent_id="from",
-                to_agent_id="to",
+                from_agent_id=from_result["agent_id"],
+                to_agent_id=to_result["agent_id"],
                 corrected_prompt="fixed task",
             )
             assert result["status"] == "reassigned"

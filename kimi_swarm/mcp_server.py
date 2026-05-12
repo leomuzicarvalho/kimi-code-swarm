@@ -212,9 +212,14 @@ def agent_execute(agent_id: str, prompt: str) -> dict[str, Any]:
             f"to check progress and retrieve the final result."
         )
     else:
+        ep_id = orch.entry_point_agent_id
         md_addition = (
             f"\n\n⚠️ **Agent `{agent_id}` task failed to start.**\n\n"
-            f"{result.get('result', '')}"
+            f"{result.get('result', '')}\n\n"
+            f"Do NOT take over this task yourself. Route this failure to the entry-point agent (`{ep_id}`) "
+            f"for coordination and reassignment. Use `agent_acknowledge_failure(agent_id='{ep_id}')` then "
+            f"`agent_reassign_with_feedback(from_agent_id='{agent_id}', to_agent_id='{ep_id}', corrected_prompt=...)`. "
+            f"You may also retry with `agent_execute(agent_id='{ep_id}', prompt=...)`."
         )
 
     return {
